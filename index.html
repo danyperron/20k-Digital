@@ -156,8 +156,8 @@ h1 span{color:var(--muted);font-weight:600}
 .die{aspect-ratio:1;border-radius:12px;background:var(--on-strong);color:var(--fg);display:flex;align-items:center;justify-content:center;
   font-size:44px;line-height:1;border:1.5px solid var(--line);box-shadow:0 2px 0 var(--shadow);transition:transform .1s;min-height:48px}
 .die.rollin{overflow:hidden}
-.die.kept{background:var(--surface-2);color:var(--muted);opacity:.8}
-.die.toroll{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.die.kept{background:var(--surface);font-weight:700}
+.die.gray{background:var(--surface-2);color:var(--muted);opacity:.55}
 .die.dead{background:var(--surface-2);color:var(--muted);opacity:.5}
 .dhint{font-size:12px;color:var(--muted);margin:0 0 8px;line-height:1.35}
 .drow-lost .num b{color:var(--bad)}
@@ -168,12 +168,12 @@ h1 span{color:var(--muted);font-weight:600}
 .dmsg.good{background:var(--good-soft);border-color:var(--good);color:var(--good)}
 .dsub{font-size:13px;color:var(--muted);margin:0 0 8px;line-height:1.45}
 .dsub b{color:var(--fg)}
-.dgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:8px}
-.dgrid .die{padding:12px}
+.dgrid{display:block;margin-bottom:8px}
+.dgrid .die{padding:12px;min-width:48px}
 .dgrid small{display:block;font:700 12px var(--num);color:var(--muted);letter-spacing:.05em;text-transform:uppercase;margin-bottom:6px}
 .dgrid .dgroup{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:10px}
 .dgrid .div{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
-.dgrid .div .die{flex:1 1 38%;min-width:44px;max-width:70px}
+.dgrid .div .die{flex:1 1 30%;min-width:48px;max-width:76px}
 .des-log{margin-top:6px}
 .des-log summary{font-weight:600;font-size:14px;cursor:pointer;color:var(--accent);padding:4px 0}
 .dlogrow{display:grid;grid-template-columns:2em 1fr auto 4.2em;gap:8px;align-items:baseline;padding:6px 0;border-bottom:1px solid var(--line);font-size:14px}
@@ -818,6 +818,11 @@ h1 span{color:var(--muted);font-weight:600}
   const DICE_GLYPH = ['', '⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
   const DES_TARGET = 20000;
   const DES_VOL_MIN_PROD = 50; // production minimale exigée pour encaisser un vol
+  // Couleur distincte par jet de dés gardé (chaque lancer a sa propre nuance).
+  const JET_COLORS = [
+    '#1f5fd6', '#16833c', '#7a3fc4', '#d06d10', '#c9302c', '#0e7f96'
+  ];
+  const jetColor = n => JET_COLORS[((n || 1) - 1 + JET_COLORS.length) % JET_COLORS.length];
 
   const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
@@ -861,7 +866,7 @@ h1 span{color:var(--muted);font-weight:600}
     return {
       screen: 'setup-des', count: 4, names: [], players: [],
       current: 0, winner: null, prevTurn: null,
-      turn: null, phase: 'idle', steal: null, log: []
+      turn: null, phase: 'idle', steal: null, log: [], keptByRoll: []
     };
   }
   function loadDes() {
@@ -886,6 +891,7 @@ h1 span{color:var(--muted);font-weight:600}
       d.phase = raw.phase === 'normal' || raw.phase === 'steal' ? raw.phase : 'idle';
       d.steal = null;
       d.log = Array.isArray(raw.log) ? raw.log.filter(e => e && typeof e.n === 'number') : [];
+      d.keptByRoll = Array.isArray(raw.keptByRoll) ? raw.keptByRoll.filter(g => g && Number.isInteger(g.jet)) : [];
       return d;
     } catch (e) {}
     return null;
@@ -980,20 +986,30 @@ h1 span{color:var(--muted);font-weight:600}
         DS.players = DS.names.map(nm => ({ score: 0, last: null }));
         DS.names = DS.names.slice(0, n);
         DS.current = 0; DS.winner = null; DS.prevTurn = null;
-        DS.turn = null; DS.phase = 'idle'; DS.steal = null; DS.log = [];
+        DS.turn = null; DS.phase = 'idle'; DS.steal = null; DS.log = []; DS.keptByRoll = [];
         DS.screen = 'game-des';
         break;
       }
       case 'lancier': {   // début de tour normal (renonce au vol)
         DS.turn = T.start(T.fresh());
         DS.phase = 'normal';
+        DS.keptByRoll = [];
+        if (DS.turn.type === 'rolling' && DS.turn.kept && DS.turn.kept.length) {
+          DS.keptByRoll.push({ jet: DS.turn.lancers || 1, dice: DS.turn.kept });
+        }
         break;
       }
       case 'rolldes': {   // relancer les dés non gardés
         const st = DS.turn;
         if (!st || st.type !== 'rolling') break;
         DS.turn = T.roll(st);
-        if (DS.turn.type === 'perdu') dLose();
+        if (DS.turn.type === 'perdu') { dLose(); break; }
+        if (DS.turn.type === 'rolling') {
+          // Ajoute les dés gardés de ce jet (avec sa couleur de jet).
+          if (DS.turn.kept && DS.turn.kept.length) {
+            DS.keptByRoll.push({ jet: DS.turn.lancers || (DS.keptByRoll.length + 1), dice: DS.turn.kept });
+          }
+        }
         break;
       }
       case 'stopdes': {   // encaisser
@@ -1020,6 +1036,10 @@ h1 span{color:var(--muted);font-weight:600}
         DS.steal = { sourcePlayer: vt.player, gainToSteal: vt.gain, leftoverDice: vt.leftoverDice };
         DS.turn = T.start(T.fresh(), vt.leftoverDice);
         DS.phase = 'steal';
+        DS.keptByRoll = [];
+        if (DS.turn.type === 'rolling' && DS.turn.kept && DS.turn.kept.length) {
+          DS.keptByRoll.push({ jet: DS.turn.lancers || 1, dice: DS.turn.kept });
+        }
         break;
       }
       case 'dresume':    // reprendre la partie aux dés en cours
@@ -1027,7 +1047,7 @@ h1 span{color:var(--muted);font-weight:600}
         break;
       case 'desnew': {   // nouvelle partie aux dés -> écran de configuration
         DS.screen = 'setup-des';
-        DS.turn = null; DS.phase = 'idle'; DS.steal = null;
+        DS.turn = null; DS.phase = 'idle'; DS.steal = null; DS.keptByRoll = [];
         if (DS.winner !== null) {  // après une victoire on repasse par l'écran de config
           DS.players = []; DS.names = []; DS.winner = null; DS.prevTurn = null; DS.log = [];
         }
@@ -1296,18 +1316,18 @@ h1 span{color:var(--muted);font-weight:600}
   // Affiche les dés du lancer courant (gardés = grisés, à relancer = surlignés).
   function diceRow(st) {
     if (!st || st.type !== 'rolling') return '';
-    if (!st.inHand || !st.inHand.length) return '';
-    const kept = (st.kept || []);
-    const toRoll = (st.toRoll || []);
-    const dieSpan = v => kept.includes(v)
-      ? `<span class="die kept">${dGlyph(v)}</span>`
-      : `<span class="die toroll">${dGlyph(v)}</span>`;
-    // Deux groupes : dés gardés (grisés) puis dés à relancer (surlignés).
-    let groups = '';
-    if (kept.length) groups += `<div class="dgroup"><small>Gardés</small><div class="div">${kept.map(dieSpan).join('')}</div></div>`;
-    if (toRoll.length) groups += `<div class="dgroup"><small>À relancer</small><div class="div">${toRoll.map(dieSpan).join('')}</div></div>`;
-    if (!groups) groups = `<div class="dgroup"><small>Lancer</small><div class="div">${(st.inHand||[]).map(dieSpan).join('')}</div></div>`;
-    return `<div class="dgrid">${groups}</div>
+    // Reconstruit la main affichée : chaque dé gardé porte la couleur de son jet,
+    // les dés du jet courant qui ne rapportent rien restent gris.
+    const keptDice = (DS.keptByRoll || [])
+      .reduce((acc, g) => acc.concat((g.dice || []).map(v => ({ v, jet: g.jet }))), []);
+    const toRoll = (st.toRoll || []).map(v => ({ v, jet: 0 }));
+    const hand = keptDice.concat(toRoll);
+    if (!hand.length) return '';
+    const cells = hand.map(d => d.jet === 0
+      ? `<span class="die gray">${dGlyph(d.v)}</span>`
+      : `<span class="die kept" style="color:${jetColor(d.jet)};border-color:${jetColor(d.jet)}">${dGlyph(d.v)}</span>`
+    ).join('');
+    return `<div class="dgrid"><div class="dgroup"><small>Dés gardés (par jet) · ${keptDice.length} · gris = à relancer</small><div class="div">${cells}</div></div></div>
       ${dHint(st) ? `<p class="dhint">${dHint(st)}</p>` : ''}`;
   }
 
