@@ -839,7 +839,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.39';
+  const VERSION = '3.40';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -877,11 +877,10 @@ h1 span{color:var(--muted);font-weight:600}
   }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
 
-  // Mode actif (tableau vs dés), stocké à part pour redevenir le bon écran au
-  // prochain lancement même sans partie tableau en cours.
+  // Cette version est dédiée au jeu de dés : le mode tableau est retiré de l'UI.
+  // On fixe toujours le mode dés (le stockage garde de la place pour plus tard).
   const KEY_MODE = '20k-scorecard-mode';
-  let MODE = 'tab';
-  try { MODE = localStorage.getItem(KEY_MODE) === 'des' ? 'des' : 'tab'; } catch (e) {}
+  let MODE = 'des';
   function saveMode() { try { localStorage.setItem(KEY_MODE, MODE); } catch (e) {} }
 
   let S = load() || fresh();
@@ -1639,7 +1638,6 @@ h1 span{color:var(--muted);font-weight:600}
       <header class="top">
         <h1>20K <span>Dés</span></h1>
         <div class="tools">
-          <button class="tool" data-a="gotab" aria-label="Revenir au mode tableau" title="Mode tableau">Tableau</button>
           <button class="tool" data-a="deslog" aria-label="Exporter l'historique des jets" title="Exporter jets">Historique</button>
           <button class="tool sound" data-a="sound" aria-label="${S.sound === false ? 'Activer le son' : 'Couper le son'}" title="${S.sound === false ? 'Son coupé' : 'Son activé'}">${S.sound === false ? ICON.mute : ICON.sound}</button>
           <button class="tool" data-a="desnew" title="Nouvelle partie aux dés">Nouveau</button>
@@ -1680,10 +1678,6 @@ h1 span{color:var(--muted);font-weight:600}
       `${esc(DS.names[i] || 'Joueur ' + (i + 1))} ${fmt(p.score)}`).join(' · ');
     return `<div class="app"><div class="setup">
       <h1>20K <span>aux dés</span></h1>
-      <div class="modes">
-        <button class="mode" data-a="gotab">Tableau</button>
-        <button class="mode" aria-pressed="true">Avec dés</button>
-      </div>
       ${resume ? `<button class="resume" data-a="dresume">
         <span class="rt"><b>Reprendre la partie en cours</b>
         <small>${lead}${DS.players.length > 4 ? ' …' : ''}</small></span>${ICON.chev}
@@ -1810,13 +1804,10 @@ h1 span{color:var(--muted);font-weight:600}
 
   const root = document.getElementById('root');
   function render() {
-    if (inDesMode()) {
-      root.innerHTML = DS.screen === 'game-des' ? viewGameDes() : viewSetupDes();
-      const panel = document.getElementById('panel');
-      document.documentElement.style.setProperty('--panel-h', (panel ? panel.offsetHeight : 0) + 'px');
-      return;
-    }
-    root.innerHTML = (S.screen === 'setup' ? viewSetup() : viewGame()) + (sheet ? viewSheet() : '');
+    // Cette version est dédiée au jeu de dés (mode tableau retiré de l'UI) :
+    // la page principale est l'écran dés (accueil sans partie, ou jeu en cours).
+    if (!inDesMode()) { MODE = 'des'; saveMode(); if (!DS.screen) DS.screen = 'setup-des'; }
+    root.innerHTML = DS.screen === 'game-des' ? viewGameDes() : viewSetupDes();
     const panel = document.getElementById('panel');
     document.documentElement.style.setProperty('--panel-h', (panel ? panel.offsetHeight : 0) + 'px');
   }
@@ -1831,7 +1822,7 @@ h1 span{color:var(--muted);font-weight:600}
   document.addEventListener('click', e => {
     const b = e.target.closest('[data-a]');
     if (S.sound !== false) { audio(); unlockSpeech(); }
-    if (b && !b.disabled) { if (inDesMode()) dAct(b.dataset.a, b.dataset.v); else act(b.dataset.a, b.dataset.v); }
+    if (b && !b.disabled) dAct(b.dataset.a, b.dataset.v);
   });
   document.addEventListener('input', e => {
     const i = e.target.dataset && e.target.dataset.name;
