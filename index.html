@@ -149,6 +149,7 @@ h1 span{color:var(--muted);font-weight:600}
 .reroll{height:46px;padding:0 16px;border-radius:12px;border:0;background:var(--good);color:var(--on-strong);font-weight:700;font-size:16px;flex:none;box-shadow:0 2px 0 var(--shadow);transition:transform .08s}
 .reroll:active:not(:disabled){transform:scale(.95)}
 .reroll:disabled{background:var(--surface-2);color:var(--muted);border:1px solid var(--line)}
+.reroll.vol{background:var(--purple)}
 .topctr{display:flex;align-items:center;gap:8px;flex:none}
 .diceleft{height:46px;padding:0 12px;border-radius:12px;background:var(--accent-soft);border:1.5px solid var(--accent);color:var(--accent);
   font-weight:700;font-size:15px;font-variant-numeric:tabular-nums;display:inline-flex;align-items:center;white-space:nowrap}
@@ -224,6 +225,10 @@ h1 span{color:var(--muted);font-weight:600}
 .resume b{display:block;font-size:15px;color:var(--accent)}
 .resume small{display:block;margin-top:2px;font-size:13px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .resume svg{flex:none;width:18px;height:18px;color:var(--accent)}
+.resume.des{background:var(--good-soft);border-color:var(--good)}
+.resume.des b{color:var(--good)}
+.resume.des svg{color:var(--good)}
+.resume .rt2{flex:none;font-size:20px}
 
 /* Journal des tours */
 .sheet{position:fixed;inset:0;z-index:20;background:var(--bg);display:flex;flex-direction:column;overscroll-behavior:contain}
@@ -826,7 +831,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.37';
+  const VERSION = '3.38';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -1271,6 +1276,8 @@ h1 span{color:var(--muted);font-weight:600}
   }
   // A game that is in progress and could still be resumed from the setup screen.
   const resumable = () => S.players.length > 0 && S.winner === null;
+  // Partie aux dés en cours (non terminée) — peut être reprise de l'accueil.
+  const desResumable = () => DS.players.length > 0 && DS.winner === null;
 
   // Plays the sounds and the voice for a scored turn, in order:
   // victory -> fanfare (just reached 3 500) -> voice (1 500 or less left) -> steal sound for the next team.
@@ -1333,6 +1340,11 @@ h1 span{color:var(--muted);font-weight:600}
         MODE = 'des'; saveMode();
         if (!DS.screen || DS.screen === 'setup-des') DS.screen = 'setup-des';
         break;
+      case 'desresume':  // reprendre la partie aux dés en cours
+        MODE = 'des'; saveMode();
+        DS.screen = 'game-des';
+        saveDes();
+        break;
       case 'new':
           if (S.winner !== null || confirmNew) {
             confirmNew = false; S.count = S.players.length || S.count; S.screen = 'setup'; msg = null; sheet = null;
@@ -1367,12 +1379,18 @@ h1 span{color:var(--muted);font-weight:600}
     const resume = resumable();
     const lead = S.players.slice(0, 4).map((p, i) =>
       `${esc(S.names[i] || 'Joueur ' + (i + 1))} ${fmt(p.score)}`).join(' · ');
+    const leadDes = DS.players.slice(0, 4).map((p, i) =>
+      `${esc(DS.names[i] || 'Joueur ' + (i + 1))} ${fmt(p.score)}`).join(' · ');
     return `<div class="app"><div class="setup">
       <h1>20K <span>Scorecard</span></h1>
       <div class="modes">
         <button class="mode" aria-pressed="true">Tableau</button>
         <button class="mode" data-a="godes">Avec dés</button>
       </div>
+      ${desResumable() ? `<button class="resume des" data-a="desresume">
+        <span class="rt"><b>Reprendre la partie aux dés</b>
+        <small>${leadDes}${DS.players.length > 4 ? ' …' : ''}</small></span><span class="rt2">🎲</span>${ICON.chev}
+      </button>` : ''}
       ${resume ? `<button class="resume" data-a="resume">
         <span class="rt"><b>Reprendre la partie en cours</b>
         <small>${lead}${S.players.length > 4 ? ' …' : ''}</small></span>${ICON.chev}
@@ -1474,9 +1492,16 @@ h1 span{color:var(--muted);font-weight:600}
     let diceLeft = 0;
     let topBtn, topLabel, topAction;
     if (isIdle) {
-      topLabel = '🎲 Lancer les dés';
-      topAction = 'lancier';
-      diceLeft = 6;
+      if (dVolOffer()) {
+        // Un vol est possible : c'est l'action principale, en évidence.
+        topLabel = `🔓 Voler ${fmt(DS.prevTurn.gain)}`;
+        topAction = 'volerd';
+        diceLeft = DS.prevTurn.leftoverDice ? DS.prevTurn.leftoverDice.length : 0;
+      } else {
+        topLabel = '🎲 Lancer les dés';
+        topAction = 'lancier';
+        diceLeft = 6;
+      }
     } else if (st.type === 'perdu') {
       topLabel = '';
       topAction = '';
@@ -1489,19 +1514,22 @@ h1 span{color:var(--muted);font-weight:600}
       ? `<span class="diceleft" title="Nombre de dés qui seront lancés">${diceLeft} dés</span>`
       : '';
     topBtn = topAction
-      ? `<div class="topctr">${diceBadge}<button class="reroll" data-a="${topAction}" ${st && st.type !== 'rolling' ? 'disabled' : ''}>${topLabel}</button></div>`
+      ? `<div class="topctr">${diceBadge}<button class="reroll ${topAction === 'volerd' ? 'vol' : ''}" data-a="${topAction}" ${st && st.type !== 'rolling' ? 'disabled' : ''}>${topLabel}</button></div>`
       : '';
 
-    // Total + état du tour.
-    const totalShown = isIdle ? 0 : (st.type === 'perdu' ? 0 : (st.score || 0));
+    // Total + état du tour. Pendant un vol, le total du tour = gain volé + production.
+    const totalShown = isIdle ? 0
+      : st.type === 'perdu' ? 0
+      : isSteal ? (DS.steal.gainToSteal + (st.score || 0))
+      : (st.score || 0);
     const label1 = isIdle ? 'Au tour de' : 'Tour de';
     const stateTxt = isIdle
       ? `<div class="dstate">Joueur prêt à lancer.</div>`
       : (st.type === 'perdu' ? `<div class="dstate"><b>${playerName}</b> a perdu ce tour (aucun point).</div>`
         : st.type === 'rolling' ? `<div class="dstate">${isSteal
-            ? `<b>Vol</b> — dés restants de ${esc(DS.names[DS.steal.sourcePlayer])} · gain ${fmt(DS.steal.gainToSteal)}. Production minimale : ${fmt(isSteal ? DES_VOL_MIN_PROD : T.OUVRAGE)}.`
+            ? `<b>Vol</b> — dés restants de ${esc(DS.names[DS.steal.sourcePlayer])} · gain ${fmt(DS.steal.gainToSteal)} à copier · produis au moins ${fmt(DES_VOL_MIN_PROD)}.`
             : `<b>Lancer n°${st.lancers}</b> · ${p.score > 0
-                ? (isSteal ? `production minimale ${fmt(DES_VOL_MIN_PROD)}` : 'encaissable dès 1 point')
+                ? 'encaissable dès 1 point'
                 : 'premier score : ' + fmt(T.OUVRAGE) + ' minimum'}.`}</div>`
         : `<div class="dstate"><b>${playerName}</b> encaisse ${fmt(st.total)}.</div>`);
 
@@ -1519,10 +1547,10 @@ h1 span{color:var(--muted);font-weight:600}
     let bottom;
     if (isIdle) {
       const offer = dVolOffer();
-      // En état idle, le bouton « Lancer » est déjà en haut à droite (.reroll).
-      // On ne garde en bas que l'option de vol quand elle est possible.
-      if (offer) {
-        bottom = `<div class="actions"><button class="act pass" data-a="volerd">Voler ${fmt(DS.prevTurn.gain)}</button></div>`;
+      // Le bouton principal du haut gère le vol (s'il est possible) ou le lancer.
+      // En bas, on propose l'autre option : lancer normalement (si le haut vole).
+      if (offer && topAction === 'volerd') {
+        bottom = `<div class="actions"><button class="act ok" data-a="lancier">Lancer les 6 dés (sans voler)</button></div>`;
       } else {
         bottom = '';
       }
