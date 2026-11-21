@@ -183,6 +183,16 @@ h1 span{color:var(--muted);font-weight:600}
 .dlogrow .lv.vol{color:var(--purple)}
 .dlogrow .lv.none{color:var(--muted);font-weight:500}
 .dlogrow .ls{text-align:right;font:700 15px var(--num);font-variant-numeric:tabular-nums}
+.dloghead{font-size:12px;color:var(--muted);margin:4px 0 8px;letter-spacing:.02em}
+.djetrow{display:grid;grid-template-columns:3.2em minmax(0,1fr) auto auto 3.4em;gap:8px;align-items:baseline;padding:7px 0;border-bottom:1px solid var(--line);font-size:14px}
+.djetrow .ln{font:600 12px var(--num);color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.djetrow .lnm{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.djetrow .ddice-mini{font:700 15px var(--num);letter-spacing:.06em;color:var(--fg);white-space:nowrap}
+.djetrow .lv{text-align:right;font-weight:600;color:var(--good);white-space:nowrap}
+.djetrow .lv.vol{color:var(--purple)}
+.djetrow .lv.none{color:var(--bad);font-weight:600}
+.djetrow .lv.lv{color:var(--fg)}
+.djetrow .ls{text-align:right;font:700 15px var(--num);font-variant-numeric:tabular-nums;color:var(--accent)}
 .dvn{display:flex;align-items:baseline;gap:6px}
 .dvn b{font:700 18px var(--num);color:var(--accent)}
 .dvn span{font-size:13px;color:var(--muted)}
@@ -810,7 +820,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.31';
+  const VERSION = '3.32';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -866,7 +876,8 @@ h1 span{color:var(--muted);font-weight:600}
     return {
       screen: 'setup-des', count: 4, names: [], players: [],
       current: 0, winner: null, prevTurn: null,
-      turn: null, phase: 'idle', steal: null, log: [], keptByRoll: []
+      turn: null, phase: 'idle', steal: null, log: [], keptByRoll: [],
+      gameId: 1, jetLog: []
     };
   }
   function loadDes() {
@@ -892,6 +903,8 @@ h1 span{color:var(--muted);font-weight:600}
       d.steal = null;
       d.log = Array.isArray(raw.log) ? raw.log.filter(e => e && typeof e.n === 'number') : [];
       d.keptByRoll = Array.isArray(raw.keptByRoll) ? raw.keptByRoll.filter(g => g && Number.isInteger(g.jet)) : [];
+      d.gameId = Number.isInteger(raw.gameId) ? raw.gameId : 1;
+      d.jetLog = Array.isArray(raw.jetLog) ? raw.jetLog.filter(e => e && typeof e.n === 'number') : [];
       return d;
     } catch (e) {}
     return null;
@@ -927,7 +940,12 @@ h1 span{color:var(--muted);font-weight:600}
       add: production, stolen: gain, total: bank,
       pass: false, after: p.score
     });
+    // Historique : on consigne l'encaissement (vol ou normal) pour validation ultérieure.
     const wasVol = gain > 0;
+    DS.jetLog.push({
+      v: VERSION, g: DS.gameId, n: DS.log.length, t: Date.now(), p: DS.current, j: -1,
+      dice: [], gained: bank, cumul: bank, comb: wasVol ? 'vol' : 'bank', kind: wasVol ? 'vol-bank' : 'bank'
+    });
     dAdvance();
     if (DS.winner !== null) {
       if (S.sound !== false) { victory(); say(DS.names[DS.winner] + ' gagne avec ' + E.fmt(DES_TARGET) + ' points!', null); }
@@ -945,7 +963,27 @@ h1 span{color:var(--muted);font-weight:600}
     DS.turn = null; DS.phase = 'idle'; DS.steal = null;
     return { wasSteal };
   }
-  // L'offre de vol est-elle disponible pour le joueur courant (avant de lancer) ?
+  // Enregistre chaque lancer (jet) pour l'historique consultable / exportable.
+  // kind : 'roll' (jet normal), 'perdu', 'bank' (encaissé), 'vol' (jet en phase de vol)
+  function recordJet(kind, extra) {
+    const st = DS.turn;
+    const rollNum = (st && st.lancers) || 0;
+    const dice = (st && (Array.isArray(st.handLost) ? st.handLost : st.inHand)) || [];
+    DS.jetLog.push({
+      v: VERSION,                // version du logiciel (pour validation)
+      g: DS.gameId,              // numéro de partie
+      n: DS.log.length + 1,      // numéro de tour
+      t: Date.now(),             // horodatage
+      p: DS.current,             // joueur
+      j: rollNum,                // numéro de lancer dans le tour
+      dice: dice,                // les dés jetés
+      gained: (st && st.gained) || 0,          // points du lancer
+      cumul: (st && st.score) || (st && st.total) || 0,  // total du tour
+      comb: (st && st.combinaison) || (extra && extra.comb) || '',
+      kind: kind
+    });
+  }
+  function resetJetLog() { DS.jetLog = []; }
   function dVolOffer() {
     if (DS.phase !== 'idle' || DS.turn) return false;   // seulement avant le lancer d'un tour
     if (DS.screen !== 'game-des') return false;
@@ -986,6 +1024,8 @@ h1 span{color:var(--muted);font-weight:600}
         DS.names = DS.names.slice(0, n);
         DS.current = 0; DS.winner = null; DS.prevTurn = null;
         DS.turn = null; DS.phase = 'idle'; DS.steal = null; DS.log = []; DS.keptByRoll = [];
+        DS.jetLog = [];
+        if (DS.gameId <= 0) DS.gameId = 1;
         DS.screen = 'game-des';
         break;
       }
@@ -993,6 +1033,7 @@ h1 span{color:var(--muted);font-weight:600}
         DS.turn = T.start(T.fresh());
         DS.phase = 'normal';
         DS.keptByRoll = [];   // le 1er jet s'affiche via la main courante
+        if (DS.turn.type === 'rolling') recordJet('roll');
         break;
       }
       case 'rolldes': {   // relancer les dés non gardés
@@ -1007,7 +1048,8 @@ h1 span{color:var(--muted);font-weight:600}
         DS.turn = T.roll(st);
         // Si le jet ne rapporte rien : on AFFICHE la perte sur place (les dés
         // perdus restent visibles) et on attend que le joueur passe au suivant.
-        if (DS.turn.type === 'perdu') break;
+        if (DS.turn.type === 'perdu') { recordJet('perdu'); break; }
+        recordJet('roll');
         if (!prevAllScored && prevKept.length) {
           DS.keptByRoll.push({ jet: prevJet, dice: prevKept });
         }
@@ -1042,6 +1084,7 @@ h1 span{color:var(--muted);font-weight:600}
         DS.turn = T.start(T.fresh(), vt.leftoverDice);
         DS.phase = 'steal';
         DS.keptByRoll = [];   // le 1er jet de vol s'affiche via la main courante
+        if (DS.turn.type === 'rolling') recordJet('vol');
         break;
       }
       case 'dresume':    // reprendre la partie aux dés en cours
@@ -1057,6 +1100,17 @@ h1 span{color:var(--muted);font-weight:600}
       }
       case 'sound':
         S.sound = S.sound === false; save(); break;
+      case 'deslog': {   // exporter l'historique des jets (validation)
+        try {
+          const blob = JSON.stringify({ app: VERSION, exportedAt: new Date().toISOString(), jets: DS.jetLog }, null, 2);
+          if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(blob); }
+          const d = document.createElement('textarea'); d.value = blob; document.body.appendChild(d); d.select();
+          try { document.execCommand('copy'); } catch (e) {}
+          document.body.removeChild(d);
+          flash('good', 'Historique copié', 'Le détail des jets (version ' + VERSION + ') a été copié dans le presse-papier.');
+        } catch (e) { flash('warn', 'Export', 'Impossible de copier l\'historique.'); }
+        break;
+      }
       default: break;
     }
     saveDes(); render();
@@ -1452,6 +1506,11 @@ h1 span{color:var(--muted);font-weight:600}
     const canTakeHint = (st.type === 'rolling' && !canTake)
       ? `<p class="dhint">Il faut ${fmt(openReq)} points pour pouvoir encaisser ce tour. Relance ou garde d'abord.</p>`
       : '';
+    // Main pleine : tous les dés du dernier lancer ont rapporté, la relance
+    // suivante rejoue les 6 dés (le total peut grimper fort, ex. suite = 1500).
+    const allScoredBanner = (st.type === 'rolling' && st.allScored)
+      ? `<div class="dmsg good">🎲 Tous les dés ont rapporté : relance les 6 dés pour continuer (le total du tour augmentera).</div>`
+      : '';
 
     return `<footer class="panel" id="panel">
       ${msg ? `<div class="msg ${msg.kind}" role="alert">${ICON.info}<div><strong>${esc(msg.title)}</strong>${esc(msg.text)}</div></div>` : ''}
@@ -1466,6 +1525,7 @@ h1 span{color:var(--muted);font-weight:600}
           ${stateTxt}
         </div>
       </div>
+      ${allScoredBanner}
       ${diceRow(st)}
       ${canTakeHint}
       ${buttons}
@@ -1479,6 +1539,7 @@ h1 span{color:var(--muted);font-weight:600}
         <h1>20K <span>Dés</span></h1>
         <div class="tools">
           <button class="tool" data-a="gotab" aria-label="Revenir au mode tableau" title="Mode tableau">Tableau</button>
+          <button class="tool" data-a="deslog" aria-label="Exporter l'historique des jets" title="Exporter jets">Historique</button>
           <button class="tool sound" data-a="sound" aria-label="${S.sound === false ? 'Activer le son' : 'Couper le son'}" title="${S.sound === false ? 'Son coupé' : 'Son activé'}">${S.sound === false ? ICON.mute : ICON.sound}</button>
           <button class="tool" data-a="desnew" title="Nouvelle partie aux dés">Nouveau</button>
         </div>
@@ -1491,15 +1552,19 @@ h1 span{color:var(--muted);font-weight:600}
         </div></div>` : ''}
       <main class="list">${DS.players.map(viewRowDes).join('')}</main>
       ${w === null ? dPanel() : ''}
-      ${DS.log.length ? `<details class="des-log"><summary>Historique (${DS.log.length})</summary>
-        ${DS.log.slice().reverse().map(e => {
-          const nm = esc(DS.names[e.i] || `Joueur ${e.i + 1}`);
-          const v = e.pass ? 'Aucun point'
-            : e.stolen ? `Vol ${fmt(e.stolen)} + ${fmt(e.add)}`
-            : `+${fmt(e.add)}`;
-          const cls = e.pass ? ' none' : e.stolen ? ' vol' : '';
-          return `<div class="dlogrow"><span class="ln">${e.n}</span><span class="lnm">${nm}</span>
-            <span class="lv${cls}">${v}</span><span class="ls">${fmt(e.after)}</span></div>`;
+      ${DS.jetLog.length ? `<details class="des-log" open><summary>Jets (${DS.jetLog.length}) · export ci-dessous</summary>
+        <p class="dloghead">Partie #${DS.gameId} · version ${esc(VERSION)} · dans l'ordre des lancers</p>
+        ${DS.jetLog.map(e => {
+          const nm = esc(DS.names[e.p] || `Joueur ${e.p + 1}`);
+          const kindLabel = e.kind === 'bank' ? 'ENC.' : e.kind === 'vol-bank' ? 'VOL ENC.' : e.kind === 'perdu' ? 'PERDU' : 'jet';
+          const comb = e.comb ? ` · ${esc(e.comb)}` : '';
+          const cls = e.kind === 'perdu' ? ' none' : (e.kind === 'bank' || e.kind === 'vol-bank') ? ' vol' : ' lv';
+          const dice = (e.dice || []).map(d => dGlyph(d)).join(' ');
+          return `<div class="djetrow"><span class="ln">T${e.n || 0}.${e.j > 0 ? e.j : ''}</span>
+            <span class="lnm">${nm}</span>
+            <span class="ddice-mini">${dice || '·'}</span>
+            <span class="lv${cls}">${kindLabel} ${fmt(e.gained || 0)}${comb}</span>
+            <span class="ls">= ${fmt(e.cumul || 0)}</span></div>`;
         }).join('')}</details>` : ''}
     </div>`;
   }
