@@ -823,7 +823,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.34';
+  const VERSION = '3.35';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -1073,9 +1073,19 @@ h1 span{color:var(--muted);font-weight:600}
           DS.turn = st;                              // conserve le rolling pour le log/renvoi
           dBank(st.score, leftover);
         } else {
-          if (!st.canStop) break;                    // il faut au moins 1000
+          const playerStarted = (DS.players[DS.current].score > 0);
+          const threshold = playerStarted ? 1 : T.OUVRAGE;   // 1000 seulement au 1er score
+          if (st.score < threshold) break;
           const production = st.score;
-          const banked = T.stop(st);                 // validation du moteur
+          // Validation via le moteur pour le 1er score (exige 1000) ; sinon,
+          // un joueur déjà ouvert peut encaisser dès 1 point (l'état banked est
+          // simplement fabriqué sans recoder les règles de scoring).
+          let banked;
+          if (playerStarted) {
+            banked = { type: 'banked', total: st.score, lancers: st.lancers, kept: st.kept };
+          } else {
+            banked = T.stop(st);
+          }
           if (!banked || banked.type !== 'banked') break;
           DS.turn = banked;
           dBank(production, leftover);
@@ -1479,7 +1489,9 @@ h1 span{color:var(--muted);font-weight:600}
       : (st.type === 'perdu' ? `<div class="dstate"><b>${playerName}</b> a perdu ce tour (aucun point).</div>`
         : st.type === 'rolling' ? `<div class="dstate">${isSteal
             ? `<b>Vol</b> — dés restants de ${esc(DS.names[DS.steal.sourcePlayer])} · gain ${fmt(DS.steal.gainToSteal)}. Production minimale : ${fmt(isSteal ? DES_VOL_MIN_PROD : T.OUVRAGE)}.`
-            : `<b>Lancer n°${st.lancers}</b> · il faut ${fmt(T.OUVRAGE)} pour pouvoir encaisser.`}</div>`
+            : `<b>Lancer n°${st.lancers}</b> · ${p.score > 0
+                ? (isSteal ? `production minimale ${fmt(DES_VOL_MIN_PROD)}` : 'encaissable dès 1 point')
+                : 'premier score : ' + fmt(T.OUVRAGE) + ' minimum'}.`}</div>`
         : `<div class="dstate"><b>${playerName}</b> encaisse ${fmt(st.total)}.</div>`);
 
     // Bandeau « main pleine ».
@@ -1488,25 +1500,30 @@ h1 span{color:var(--muted);font-weight:600}
       ? `<div class="dmsg good">🔓 Vol possible : partir des dés restants de <b>${esc(DS.names[DS.prevTurn.player])}</b> (gain ${fmt(DS.prevTurn.gain)} à copier).</div>`
       : '';
 
+    // Seuil d'encaissement : 1000 seulement pour le PREMIER score d'un joueur ;
+    // ensuite il peut encaisser son tour dès 1 point.
+    const openReq = isSteal ? DES_VOL_MIN_PROD : (p.score > 0 ? 1 : T.OUVRAGE);
+
     // Bouton(s) du bas.
     let bottom;
     if (isIdle) {
       const offer = dVolOffer();
+      // En état idle, le bouton « Lancer » est déjà en haut à droite (.reroll).
+      // On ne garde en bas que l'option de vol quand elle est possible.
       if (offer) {
-        bottom = `<div class="actions">
-          <button class="act pass" data-a="volerd">Voler ${fmt(DS.prevTurn.gain)}</button>
-          <button class="act ok" data-a="lancier">Lancer</button>
-        </div>`;
+        bottom = `<div class="actions"><button class="act pass" data-a="volerd">Voler ${fmt(DS.prevTurn.gain)}</button></div>`;
       } else {
-        bottom = `<div class="actions"><button class="act ok" data-a="lancier">Lancer les 6 dés</button></div>`;
+        bottom = '';
       }
     } else if (st.type === 'perdu') {
       bottom = `<button class="act ok" style="width:100%" data-a="dasser">Passer à ${nextName}</button>`;
     } else {
-      const canTake = st.type === 'rolling' && (isSteal ? (st.score >= DES_VOL_MIN_PROD) : st.canStop);
+      const canTake = st.type === 'rolling' && st.score >= openReq;
       const stopLabel = isSteal ? 'Prendre le vol' : 'Arrêter & encaisser';
       const canTakeHint = (st.type === 'rolling' && !canTake)
-        ? `<p class="dhint">Il faut ${fmt(isSteal ? DES_VOL_MIN_PROD : T.OUVRAGE)} points pour pouvoir encaisser ce tour.</p>` : '';
+        ? `<p class="dhint">${isSteal ? 'Il faut ' + fmt(DES_VOL_MIN_PROD) + ' points produits pour encaisser le vol.'
+            : (p.score > 0 ? 'Tu peux encaisser dès 1 point — appuie sur Relancer ou Arrêter.'
+              : 'C\'est ton premier score : il faut '+fmt(T.OUVRAGE)+' points pour pouvoir encaisser.')}</p>` : '';
       bottom = `${canTakeHint}
         <div class="actions"><button class="act ok" data-a="stopdes" ${canTake ? '' : 'disabled'}>${stopLabel}</button></div>`;
     }
