@@ -883,7 +883,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.51';
+  const VERSION = '3.52';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -2126,7 +2126,8 @@ h1 span{color:var(--muted);font-weight:600}
   const ONLINE_WS = (function () {
     try { const saved = localStorage.getItem('20k-ws');
       if (saved && /^wss?:\/\//.test(saved)) return saved; } catch (e) {}
-    return 'ws://127.0.0.1:8770/room/m';   // défaut : serveur de développement local
+    // Serveur Cloudflare déployé (Worker + Durable Object) — défaut pour tous.
+    return 'wss://20k-dice-online.perron.workers.dev/room/m';
   })();
   const OL = {
     ws: null, connected: false, myIndex: -1, code: '', members: [],
