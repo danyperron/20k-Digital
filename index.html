@@ -146,7 +146,7 @@ h1 span{color:var(--muted);font-weight:600}
 .mode{height:46px;border-radius:12px;border:1px solid var(--line);background:var(--surface-2);color:var(--fg);font-weight:700;font-size:15px}
 .mode[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--on-strong)}
 .dice-wrap{display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between;align-items:flex-end;margin-bottom:10px}
-.reroll{height:46px;padding:0 16px;border-radius:12px;border:0;background:var(--good);color:var(--on-strong);font-weight:700;font-size:16px;flex:none;box-shadow:0 2px 0 var(--shadow);transition:transform .08s}
+.reroll{height:46px;padding:0 16px;border-radius:12px;border:0;background:var(--warn);color:var(--on-strong);font-weight:700;font-size:16px;flex:none;box-shadow:0 2px 0 var(--shadow);transition:transform .08s}
 .reroll:active:not(:disabled){transform:scale(.95)}
 .reroll:disabled{background:var(--surface-2);color:var(--muted);border:1px solid var(--line)}
 .reroll.vol{background:var(--purple)}
@@ -839,7 +839,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.40';
+  const VERSION = '3.41';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -847,7 +847,18 @@ h1 span{color:var(--muted);font-weight:600}
   const DICE_GLYPH = ['', '⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
   const DES_TARGET = 20000;
   const DES_VOL_MIN_PROD = 50; // production minimale exigée pour encaisser un vol
-  // Couleur distincte par jet de dés gardé (chaque lancer a sa propre nuance).
+  // Couleur par VALEUR de dé : 6 = vert (bon), 1 = rouge (mauvais), dégradé entre deux.
+  const VALUE_COLORS = {
+    6: '#16833c',   // vert
+    5: '#4f9d33',   // vert-jaune
+    4: '#9aa91f',   // jaune verdâtre
+    3: '#c49a18',   // ambre/jaune
+    2: '#d06d10',   // orange
+    1: '#c9302c'    // rouge
+  };
+  const dieValueColor = v => VALUE_COLORS[v] || '#5d6878';
+
+  // Couleur distincte par jet de dés gardé (utilisée dans l'export / log).
   const JET_COLORS = [
     '#1f5fd6', '#16833c', '#7a3fc4', '#d06d10', '#c9302c', '#0e7f96'
   ];
@@ -1003,7 +1014,7 @@ h1 span{color:var(--muted);font-weight:600}
       p: DS.current,             // joueur
       j: rollNum,                // numéro de lancer dans le tour
       dice: dice,                // les dés jetés
-      color: jetColor(rollNum),  // couleur de ce jet (pour l'affichage/export)
+      color: dieValueColor(dice[0]),  // couleur indicative (première valeur de dé)
       gained: (st && st.gained) || 0,          // points du lancer
       cumul: (st && st.score) || (st && st.total) || 0,  // total du tour
       comb: (st && st.combinaison) || (extra && extra.comb) || '',
@@ -1459,7 +1470,7 @@ h1 span{color:var(--muted);font-weight:600}
   // l'interface reste stable. En état perdu : les dés sans valeur en gris.
   function diceRow(st) {
     const die = (d) => d.kept
-      ? `<span class="die kept" style="color:${jetColor(d.jet)};border-color:${jetColor(d.jet)}">${dGlyph(d.v)}</span>`
+      ? `<span class="die kept" style="color:${dieValueColor(d.v)};border-color:${dieValueColor(d.v)};background:${dieValueColor(d.v)}1f">${dGlyph(d.v)}</span>`
       : `<span class="die gray">${dGlyph(d.v)}</span>`;
     // Idle : plateau vide de 6 dés gris (fenêtre identique au lancer).
     if (!st) {
