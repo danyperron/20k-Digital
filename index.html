@@ -230,6 +230,37 @@ h1 span{color:var(--muted);font-weight:600}
 .version{margin:-8px 0 0;text-align:center;font-size:12px;letter-spacing:.06em;color:var(--muted);font-variant-numeric:tabular-nums}
 .go{height:56px;border-radius:14px;border:0;background:var(--good);color:var(--on-strong);font-weight:700;font-size:18px}
 .go.danger{background:var(--bad)}
+.go:disabled{background:var(--surface-2);color:var(--muted);border:1px solid var(--line);cursor:not-allowed}
+.setup h2 .cnt{display:inline-block;min-width:22px;text-align:center;background:var(--accent);color:var(--on-strong);
+  border-radius:10px;padding:1px 7px;font:700 12px var(--num);vertical-align:middle}
+.pchips{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.pchip{display:flex;align-items:center;gap:8px;text-align:left;border:1.5px solid var(--line);background:var(--surface-2);
+  border-radius:12px;padding:8px 10px;color:var(--fg);font-weight:600;font-size:14px;min-width:0}
+.pchip.on{background:var(--accent-soft);border-color:var(--accent)}
+.pchip .pnm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pchip .pstat{font:600 11px var(--num);color:var(--muted);white-space:nowrap}
+.pchip.on .pstat{color:var(--accent)}
+.avat{width:30px;height:30px;border-radius:50%;color:#fff;display:inline-flex;align-items:center;justify-content:center;
+  font:700 15px var(--num);flex:none;box-shadow:inset 0 -2px 0 rgba(0,0,0,.18)}
+.linkbtn{background:none;border:0;color:var(--accent);font-weight:600;font-size:14px;padding:6px 0;text-decoration:underline;cursor:pointer}
+.roster-empty{display:flex;flex-direction:column;gap:10px;align-items:flex-start;color:var(--muted);font-size:14px}
+.prow{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;margin-bottom:8px}
+.prow .pinfo{flex:1;min-width:0}
+.prow .pinfo b{display:block;font-size:15px}
+.prow .pinfo small{color:var(--muted);font-size:12px}
+.prow .pops{display:flex;gap:6px;align-items:center}
+.prow .trophy{font-size:15px}
+.mini{width:30px;height:30px;border-radius:9px;border:1px solid var(--line);background:var(--surface-2);color:var(--fg);
+  font-weight:700;font-size:14px;display:inline-flex;align-items:center;justify-content:center}
+.mini.danger{color:var(--bad)}
+.plist{margin:4px 0}
+.peditor{border:1px dashed var(--accent);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:12px;background:var(--accent-soft)}
+.peditor input{height:44px;border-radius:10px;border:1.5px solid var(--line);background:var(--surface);color:var(--fg);
+  font-size:16px;padding:0 12px;width:100%}
+.pcolors{display:flex;flex-wrap:wrap;gap:8px}
+.sw{width:30px;height:30px;border-radius:50%;cursor:pointer;flex:none}
+.sw.on{outline:3px solid var(--fg);outline-offset:2px}
+.pbtns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .resume{display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:var(--accent-soft);
   border:1.5px solid var(--accent);border-radius:14px;padding:12px 14px;color:var(--fg);
   transition:transform .08s}
@@ -852,7 +883,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.48';
+  const VERSION = '3.49';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -876,6 +907,40 @@ h1 span{color:var(--muted);font-weight:600}
     '#1f5fd6', '#16833c', '#7a3fc4', '#d06d10', '#c9302c', '#0e7f96'
   ];
   const jetColor = n => JET_COLORS[((n || 1) - 1 + JET_COLORS.length) % JET_COLORS.length];
+
+  // Couleurs pastel pour les avatars / pastilles des joueurs du répertoire.
+  const PLAYER_COLORS = ['#1f5fd6', '#16833c', '#7a3fc4', '#d06d10', '#c9302c', '#0e7f96', '#9aa91f', '#b4500f'];
+
+  // ---- Répertoire de joueurs (profil persistant, utilisable sur plusieurs
+  // appareils à terme). Clé localStorage séparée de l'état de partie pour
+  // préparer une future synchronisation multi-device.
+  const KEY_PLAYERS = '20k-players';
+  let roster = { players: [], updatedAt: 0 };
+  function loadRoster() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(KEY_PLAYERS));
+      if (!raw || !Array.isArray(raw.players)) { roster = { players: [], updatedAt: 0 }; return; }
+      const players = raw.players
+        .filter(p => p && typeof p.name === 'string' && p.name.trim())
+        .map(p => ({
+          id: typeof p.id === 'string' ? p.id : uid(),
+          name: p.name.trim(),
+          color: typeof p.color === 'string' ? p.color : PLAYER_COLORS[Math.floor(Math.random() * PLAYER_COLORS.length)],
+          stats: p.stats && typeof p.stats === 'object'
+            ? { games: +p.stats.games || 0, wins: +p.stats.wins || 0, points: +p.stats.points || 0 }
+            : { games: 0, wins: 0, points: 0 }
+        }));
+      roster = { players, updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : Date.now() };
+    } catch (e) { roster = { players: [], updatedAt: 0 }; }
+  }
+  function saveRoster() {
+    roster.updatedAt = Date.now();
+    try { localStorage.setItem(KEY_PLAYERS, JSON.stringify(roster)); } catch (e) {}
+  }
+  function uid() {
+    return 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+  function findPlayer(id) { return roster.players.find(p => p.id === id) || null; }
 
   const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
@@ -912,11 +977,13 @@ h1 span{color:var(--muted);font-weight:600}
   let confirmNew = false, confirmStart = false, confirmTimer = 0;
   let pulseVol = false;
   let sheet = null; // 'log' when the turn history is open
+  let editingPlayer = null; // id du joueur en cours d'édition dans le répertoire, ou '' pour un nouveau
+  let editingName = '', editingColor = '';
 
   // ---- Mode dés (état de partie distinct, clé localStorage « -des ») --------
   function freshDes() {
     return {
-      screen: 'setup-des', count: 4, names: [], players: [],
+      screen: 'setup-des', count: 4, names: [], players: [], playerIds: [], selected: [],
       current: 0, winner: null, prevTurn: null,
       turn: null, phase: 'idle', steal: null, log: [], keptByRoll: [],
       gameId: 1, jetLog: [], stats: []
@@ -932,14 +999,19 @@ h1 span{color:var(--muted);font-weight:600}
           score: p.score, last: typeof p.last === 'number' ? p.last : null }) : [];
       if (!(raw.screen === 'game-des') || !players.length) {
         // En écran de config (ou partie sans joueur), on conserve quand même
-        // l'historique et le compteur de parties pour l'affichage de l'accueil.
+        // l'historique, le compteur de parties et la sélection courante pour
+        // l'affichage de l'accueil.
         d.stats = Array.isArray(raw.stats) ? raw.stats.filter(s => s && typeof s.ts === 'number') : [];
         d.gameId = Number.isInteger(raw.gameId) ? raw.gameId : 1;
+        d.selected = Array.isArray(raw.selected) ? raw.selected.filter(p => typeof p === 'string') : [];
+        d.count = Number.isInteger(raw.count) && raw.count >= 2 ? raw.count : 4;
         return d;
       }
       d.screen = 'game-des';
       d.players = players;
       d.names = Array.isArray(raw.names) ? raw.names.map((n, i) => (typeof n === 'string' && n.trim()) ? n : 'Joueur ' + (i + 1)) : [];
+      d.playerIds = Array.isArray(raw.playerIds) ? raw.playerIds.filter(p => typeof p === 'string') : [];
+      d.selected = Array.isArray(raw.selected) ? raw.selected.filter(p => typeof p === 'string') : [];
       d.count = Array.isArray(raw.names) ? raw.names.length : (typeof raw.count === 'number' ? raw.count : 4);
       d.current = Number.isInteger(raw.current) && raw.current >= 0 && raw.current < players.length ? raw.current : 0;
       d.winner = Number.isInteger(raw.winner) && raw.winner >= 0 && raw.winner < players.length ? raw.winner : null;
@@ -960,6 +1032,21 @@ h1 span{color:var(--muted);font-weight:600}
   }
   function saveDes() { try { localStorage.setItem(KEY_DES, JSON.stringify(DS)); } catch (e) {} }
   let DS = loadDes() || freshDes();
+  loadRoster();
+  // Sur un tout premier chargement (répertoire vide), on place quelques joueurs
+  // d'exemple pour montrer la sélection et les statistiques. Marqué par un flag
+  // pour ne pas ré-injecter après une suppression volontaire.
+  if (!roster.players.length && (function () { try { return !localStorage.getItem('20k-players-demo'); } catch (e) { return false; } })()) {
+    const seed = [
+      ['Anne', '#1f5fd6', { games: 14, wins: 5, points: 210500 }],
+      ['Benoît', '#d06d10', { games: 11, wins: 2, points: 152000 }],
+      ['Carla', '#7a3fc4', { games: 9, wins: 4, points: 174300 }],
+      ['Denis', '#16833c', { games: 6, wins: 1, points: 88000 }]
+    ];
+    roster.players = seed.map(([name, color, st]) => ({ id: uid(), name, color, stats: st }));
+    saveRoster();
+    try { localStorage.setItem('20k-players-demo', '1'); } catch (e) {}
+  }
 
   // ---- Exemple de données (démo) pour tester l'historique -------------------
   // Ne s'applique qu'une seule fois au tout premier chargement, pour que la
@@ -1108,6 +1195,18 @@ h1 span{color:var(--muted);font-weight:600}
       winner: DS.winner,
       jets: DS.jetLog.length    // nb de jets enregistrés
     });
+    // Mise à jour des statistiques des joueurs du répertoire.
+    const ids = (DS.playerIds || []);
+    if (ids.length && (DS.winner !== null && DS.winner >= 0 && DS.winner < DS.players.length)) {
+      ids.forEach((id, i) => {
+        const p = findPlayer(id);
+        if (!p) return;
+        p.stats.games += 1;
+        p.stats.points += (DS.players[i] ? DS.players[i].score : 0);
+        if (i === DS.winner) p.stats.wins += 1;
+      });
+      saveRoster();
+    }
     DS.gameId = DS.gameId + 1;  // prochaine partie
   }
   function dVolOffer() {
@@ -1140,17 +1239,54 @@ h1 span{color:var(--muted);font-weight:600}
         MODE = 'tab'; saveMode();
         S.screen = 'setup';
         break;
-      case 'count': DS.count = +v; break;
+      case 'count': DS.count = +v; saveDes(); break;
+      case 'togsel': {   // cocher/décocher un joueur du répertoire pour la partie
+        const id = String(v); DS.selected = DS.selected || [];
+        DS.selected = DS.selected.includes(id) ? DS.selected.filter(x => x !== id) : DS.selected.concat(id);
+        if (DS.selected.length >= 2) DS.count = DS.selected.length;
+        saveDes();
+        break;
+      }
+      case 'roster': DS.screen = 'roster'; saveDes(); break;
+      case 'backdes': DS.screen = 'setup-des'; saveDes(); break;
+      case 'pedit':   // éditer un joueur (v=id, vide = nouveau)
+        if (v) { const p = findPlayer(v); editingName = p ? p.name : ''; editingColor = p ? p.color : ''; }
+        else { editingName = ''; editingColor = PLAYER_COLORS[0]; }
+        editingPlayer = (v || '');
+        render(); break;
+      case 'pfield': editingName = String(v == null ? '' : v).slice(0, 18); render(); break;
+      case 'setcolor': editingColor = String(v); render(); break;
+      case 'psave': {  // enregistrer le formulaire de l'éditeur de joueurs
+        const name = editingName.trim();
+        if (editingPlayer) {
+          const p = findPlayer(editingPlayer);
+          if (p) { p.name = name || p.name; if (editingColor) p.color = editingColor; }
+        } else if (name) {
+          roster.players.push({ id: uid(), name, color: editingColor || PLAYER_COLORS[0], stats: { games: 0, wins: 0, points: 0 } });
+        }
+        saveRoster(); editingPlayer = null; editingName = ''; editingColor = '';
+        render(); break;
+      }
+      case 'pcancel': editingPlayer = null; editingName = ''; editingColor = ''; render(); break;
+      case 'pdel': {   // supprimer un joueur
+        roster.players = roster.players.filter(p => p.id !== String(v));
+        DS.selected = (DS.selected || []).filter(x => x !== String(v));
+        saveRoster(); saveDes(); render(); break;
+      }
       case 'start': {
-        const n = DS.count;
-        DS.names = Array.from({ length: n }, (_, i) => DS.names[i] || `Joueur ${i + 1}`);
-        DS.players = DS.names.map(nm => ({ score: 0, last: null }));
-        DS.names = DS.names.slice(0, n);
+        const ids = (DS.selected || []).filter(id => findPlayer(id));
+        if (ids.length < 2) break;   // il faut au moins 2 joueurs du répertoire
+        DS.playerIds = ids.slice();
+        // Garder l'ordre des joueurs du répertoire ; noms pris depuis les profils.
+        DS.names = ids.map(id => findPlayer(id).name);
+        DS.players = DS.names.map(() => ({ score: 0, last: null }));
+        DS.count = DS.names.length;
         DS.current = 0; DS.winner = null; DS.prevTurn = null;
         DS.turn = null; DS.phase = 'idle'; DS.steal = null; DS.log = []; DS.keptByRoll = [];
         DS.jetLog = [];
         if (DS.gameId <= 0) DS.gameId = 1;
         DS.screen = 'game-des';
+        saveDes();
         break;
       }
       case 'dereplay': {   // relancer une partie passée avec les mêmes joueurs
@@ -1784,12 +1920,29 @@ h1 span{color:var(--muted);font-weight:600}
   }
 
   function viewSetupDes() {
-    const counts = [2, 3, 4, 5, 6].map(n =>
-      `<button data-a="count" data-v="${n}" aria-pressed="${DS.count === n}">${n}</button>`).join('');
     const resumableDes = () => DS.players.length > 0 && DS.winner === null;
     const resume = resumableDes();
     const lead = DS.players.slice(0, 4).map((p, i) =>
       `${esc(DS.names[i] || 'Joueur ' + (i + 1))} ${fmt(p.score)}`).join(' · ');
+    const sel = DS.selected = (DS.selected || []).filter(id => findPlayer(id));
+    // Sélection des joueurs du répertoire.
+    let playersHtml;
+    if (!roster.players.length) {
+      playersHtml = `<div class="roster-empty">Aucun joueur enregistré.
+        <button class="act slate" data-a="roster">Créer des joueurs</button></div>`;
+    } else {
+      const chips = roster.players.map(p => {
+        const on = sel.includes(p.id);
+        return `<button class="pchip${on ? ' on' : ''}" data-a="togsel" data-v="${esc(p.id)}" aria-pressed="${on}">
+          <span class="avat" style="background:${p.color}">${esc((p.name[0] || '?').toUpperCase())}</span>
+          <span class="pnm">${esc(p.name)}</span>
+          <span class="pstat">${p.stats.wins} 🏆 · ${p.stats.points ? fmt(p.stats.points) : 0} pts</span>
+        </button>`;
+      }).join('');
+      playersHtml = `<div class="pchips">${chips}</div>
+        <button class="linkbtn" data-a="roster">Gérer les joueurs · statistiques</button>`;
+    }
+    const goDisabled = sel.length < 2;
     return `<div class="app"><div class="setup">
       <h1>20K <span>aux dés</span></h1>
       ${resume ? `<button class="resume" data-a="dresume">
@@ -1806,16 +1959,54 @@ h1 span{color:var(--muted);font-weight:600}
             <span class="rt"><b>🏆 ${winName}</b><small>${date} · ${scores} · ${g.jets} jet${g.jets===1?'':'s'}</small></span>${ICON.chev}
           </button>`;
         }).join('')}</div>` : ''}
-      <div><h2>Nombre de joueurs</h2><div class="count">${counts}</div></div>
+      <div><h2>Joueurs de la partie <span class="cnt">${sel.length}</span></h2>${playersHtml}</div>
       <ul class="rules">
         <li>6 dés : garde les dés qui rapportent, relance le reste</li>
         <li>Ouverture <b>${fmt(1000)}</b> avant de pouvoir encaisser</li>
         <li>Vol permis à partir de <b>${fmt(3500)}</b></li>
         <li>Objectif exact : <b>${fmt(20000)}</b></li>
       </ul>
-      <button class="go" data-a="start">Commencer la partie aux dés</button>
+      <button class="go" data-a="start" ${goDisabled ? 'disabled' : ''}>Commencer la partie (${sel.length} joueur${sel.length===1?'':'s'})</button>
       <p class="version">Version ${VERSION}</p>
     </div></div>`;
+  }
+
+  function viewRoster() {
+    const row = p => `<div class="prow">
+        <span class="avat" style="background:${p.color}">${esc((p.name[0] || '?').toUpperCase())}</span>
+        <div class="pinfo"><b>${esc(p.name)}</b>
+          <small>${p.stats.games} partie${p.stats.games===1?'':'s'} · ${p.stats.wins} vi${p.stats.wins===1?'ctoire':'ctoires'} · ${fmt(p.stats.points)} pts cumulés</small></div>
+        <div class="pops">
+          ${p.stats.wins ? `<span class="trophy">🏆</span>` : ''}
+          <button class="mini" data-a="pedit" data-v="${esc(p.id)}">✎</button>
+          <button class="mini danger" data-a="pdel" data-v="${esc(p.id)}">✕</button>
+        </div>
+      </div>`;
+    const editor = editingPlayer !== null ? editorForm() : '';
+    return `<div class="app"><div class="setup">
+      <h1>Joueurs <span>du répertoire</span></h1>
+      <p class="dsub">Vos profils sont enregistrés et gardent leurs statistiques. À terme, ils pourront être partagés entre vos appareils.</p>
+      ${editor}
+      <div class="plist">
+        ${roster.players.length ? roster.players.map(row).join('') : '<p class="dsub">Aucun joueur pour le moment. Ajoutez le premier ci-dessous.</p>'}
+      </div>
+      <button class="act ok" style="width:100%" data-a="pedit" data-v="">+ Ajouter un joueur</button>
+      <button class="linkbtn" style="margin-top:10px" data-a="backdes">← Retour à l\'accueil</button>
+      <p class="version">Version ${VERSION}</p>
+    </div></div>`;
+  }
+  function editorForm() {
+    const cur = editingColor || PLAYER_COLORS[0];
+    const swatches = PLAYER_COLORS.map(c =>
+      `<span class="sw${c === cur ? ' on' : ''}" data-a="setcolor" data-v="${c}" style="background:${c}"></span>`).join('');
+    return `<div class="peditor">
+      <input type="text" id="p-name" data-a="pfield" data-v="${esc(editingName || '')}" value="${esc(editingName || '')}" placeholder="Nom du joueur" maxlength="18">
+      <div class="pcolors">${swatches}</div>
+      <div class="pbtns">
+        <button class="act ok" data-a="psave" data-v="">Enregistrer</button>
+        <button class="act slate" data-a="pcancel">Annuler</button>
+      </div>
+    </div>`;
   }
 
   function viewRow(p, i) {
@@ -1921,7 +2112,7 @@ h1 span{color:var(--muted);font-weight:600}
     // Cette version est dédiée au jeu de dés (mode tableau retiré de l'UI) :
     // la page principale est l'écran dés (accueil sans partie, ou jeu en cours).
     if (!inDesMode()) { MODE = 'des'; saveMode(); if (!DS.screen) DS.screen = 'setup-des'; }
-    root.innerHTML = DS.screen === 'game-des' ? viewGameDes() : viewSetupDes();
+    root.innerHTML = DS.screen === 'game-des' ? viewGameDes() : DS.screen === 'roster' ? viewRoster() : viewSetupDes();
     const panel = document.getElementById('panel');
     document.documentElement.style.setProperty('--panel-h', (panel ? panel.offsetHeight : 0) + 'px');
   }
@@ -1946,8 +2137,12 @@ h1 span{color:var(--muted);font-weight:600}
     }
     const di = e.target.dataset && e.target.dataset.dname;
     if (di !== undefined && inDesMode()) renameDes(+di, e.target.value);
+    const pn = e.target && e.target.id === 'p-name';
+    if (pn) editingName = e.target.value.slice(0, 18);
   });
   document.addEventListener('change', e => {
+    const pn = e.target && e.target.id === 'p-name';
+    if (pn) { editingName = e.target.value.slice(0, 18); render(); }
     const i = e.target.dataset && e.target.dataset.name;
     if (i !== undefined && !e.target.value.trim()) {
       Object.assign(S, E.reduce(S, { type: 'rename', i: +i, name: `Joueur ${+i + 1}` }).state);
