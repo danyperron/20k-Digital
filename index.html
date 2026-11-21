@@ -839,7 +839,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.41';
+  const VERSION = '3.42';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -947,6 +947,49 @@ h1 span{color:var(--muted);font-weight:600}
   }
   function saveDes() { try { localStorage.setItem(KEY_DES, JSON.stringify(DS)); } catch (e) {} }
   let DS = loadDes() || freshDes();
+
+  // ---- Exemple de données (démo) pour tester l'historique -------------------
+  // Ne s'applique qu'une seule fois au tout premier chargement, pour que la
+  // liste « Parties terminées » (et la reprise d'une partie) soit visible et
+  // testable avant d'avoir fini une vraie partie. Marqué « démo » dans le nom.
+  const KEY_DEMO = '20k-scorecard-v1-des-demo';
+  function seedDesDemo() {
+    if (DS.stats.length) return;              // de vraies parties existent déjà
+    const now = Date.now();
+    const one = 60000, hour = 3600000;
+    DS.stats.push({                      // partie terminée il y a ~2 jours
+      ts: now - 2 * 24 * hour, g: 0, v: VERSION,
+      names: ['Anne', 'Benoît', 'Carla'],
+      players: [{ score: 20000, last: 300 }, { score: 16450, last: 0 }, { score: 13200, last: 0 }],
+      winner: 0, jets: 41
+    });
+    DS.stats.push({                      // partie terminée il y a ~1 heure
+      ts: now - 1 * hour - one * 20, g: 1, v: VERSION,
+      names: ['Denis', 'Éva'],
+      players: [{ score: 12050, last: 450 }, { score: 20000, last: 200 }],
+      winner: 1, jets: 27
+    });
+    // Une partie en cours reprenable (aucun gagnant) — on reste sur l'accueil
+    // (setup-des) pour que la carte « Reprendre la partie » s'affiche.
+    DS.screen = 'setup-des'; DS.count = 3;
+    DS.names = ['Alice', 'Bob', 'Charlie'];
+    DS.players = DS.names.map(nm => ({ score: 0, last: null }));
+    DS.players[0].score = 8725; DS.players[0].last = 150;
+    DS.players[1].score = 12400; DS.players[1].last = 0;
+    DS.players[2].score = 6100; DS.players[2].last = 300;
+    DS.current = 2; DS.winner = null; DS.prevTurn = { player: 2, gain: 300, leftoverDice: [2, 5] };
+    DS.turn = null; DS.phase = 'idle'; DS.steal = null; DS.log = []; DS.keptByRoll = [];
+    DS.jetLog = []; DS.gameId = 2;
+    try { localStorage.setItem(KEY_DEMO, '1'); } catch (e) {}
+    saveDes();
+  }
+  // L'exemple n'est injecté QUE sur un tout premier chargement vierge (aucune
+  // partie en cours, aucun joueur, aucun historique) : jamais sur une vraie
+  // partie déjà commencée, ni une fois l'exemple déjà posé (KEY_DEMO).
+  function neverSeeded() { try { return !localStorage.getItem(KEY_DEMO); } catch (e) { return false; } }
+  if (!DS.stats.length && DS.screen === 'setup-des' && !DS.names.length && !DS.players.length && neverSeeded()) {
+    seedDesDemo();
+  }
   const inDesMode = () => MODE === 'des' && (DS.screen === 'setup-des' || DS.screen === 'game-des');
 
   // ---- Actions du mode dés -----------------------------------------------
@@ -1014,7 +1057,7 @@ h1 span{color:var(--muted);font-weight:600}
       p: DS.current,             // joueur
       j: rollNum,                // numéro de lancer dans le tour
       dice: dice,                // les dés jetés
-      color: dieValueColor(dice[0]),  // couleur indicative (première valeur de dé)
+      color: jetColor(rollNum - 1),   // couleur du jet (per-jet, distinct de la valeur)
       gained: (st && st.gained) || 0,          // points du lancer
       cumul: (st && st.score) || (st && st.total) || 0,  // total du tour
       comb: (st && st.combinaison) || (extra && extra.comb) || '',
@@ -1470,7 +1513,7 @@ h1 span{color:var(--muted);font-weight:600}
   // l'interface reste stable. En état perdu : les dés sans valeur en gris.
   function diceRow(st) {
     const die = (d) => d.kept
-      ? `<span class="die kept" style="color:${dieValueColor(d.v)};border-color:${dieValueColor(d.v)};background:${dieValueColor(d.v)}1f">${dGlyph(d.v)}</span>`
+      ? `<span class="die kept" style="color:${jetColor(d.jet)};border-color:${jetColor(d.jet)}">${dGlyph(d.v)}</span>`
       : `<span class="die gray">${dGlyph(d.v)}</span>`;
     // Idle : plateau vide de 6 dés gris (fenêtre identique au lancer).
     if (!st) {
@@ -1567,7 +1610,7 @@ h1 span{color:var(--muted);font-weight:600}
       diceLeft = st.allScored ? 6 : ((st.toRoll || []).length);
     }
     const diceBadge = topAction
-      ? `<span class="diceleft" title="Nombre de dés qui seront lancés">${diceLeft} dés</span>`
+      ? `<span class="diceleft" style="color:${dieValueColor(diceLeft)};border-color:${dieValueColor(diceLeft)};background:${dieValueColor(diceLeft)}1f" title="Nombre de dés qui seront lancés">${diceLeft} dés</span>`
       : '';
     topBtn = topAction
       ? `<div class="topctr">${diceBadge}<button class="reroll ${topAction === 'volerd' ? 'vol' : ''}" data-a="${topAction}" ${st && st.type !== 'rolling' ? 'disabled' : ''}>${topLabel}</button></div>`
