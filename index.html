@@ -941,7 +941,6 @@ h1 span{color:var(--muted);font-weight:600}
     DS.log.push({ i: DS.current, n: DS.log.length + 1, add: 0, stolen: 0, total: 0, pass: true, after: DS.players[DS.current].score });
     // Une perte efface l'occasion de vol (comme « Aucun point » au tableau).
     DS.prevTurn = null;
-    if (S.sound !== false) { buzzer(); }
     dAdvance();
     DS.turn = null; DS.phase = 'idle'; DS.steal = null;
     return { wasSteal };
@@ -993,23 +992,29 @@ h1 span{color:var(--muted);font-weight:600}
       case 'lancier': {   // début de tour normal (renonce au vol)
         DS.turn = T.start(T.fresh());
         DS.phase = 'normal';
-        DS.keptByRoll = [];
-        if (DS.turn.type === 'rolling' && DS.turn.kept && DS.turn.kept.length) {
-          DS.keptByRoll.push({ jet: DS.turn.lancers || 1, dice: DS.turn.kept });
-        }
+        DS.keptByRoll = [];   // le 1er jet s'affiche via la main courante
         break;
       }
       case 'rolldes': {   // relancer les dés non gardés
         const st = DS.turn;
         if (!st || st.type !== 'rolling') break;
+        // Les dés gardés du jet qui vient de terminer sortent de la main et
+        // restent affichés (coloriés par jet). Sauf si TOUS ont rapporté (allScored) :
+        // ils ont été relancés, il ne reste donc rien de « tenu » à montrer.
+        const prevAllScored = st.allScored;
+        const prevKept = (st.kept || []);
+        const prevJet = st.lancers || 1;
         DS.turn = T.roll(st);
-        if (DS.turn.type === 'perdu') { dLose(); break; }
-        if (DS.turn.type === 'rolling') {
-          // Ajoute les dés gardés de ce jet (avec sa couleur de jet).
-          if (DS.turn.kept && DS.turn.kept.length) {
-            DS.keptByRoll.push({ jet: DS.turn.lancers || (DS.keptByRoll.length + 1), dice: DS.turn.kept });
-          }
+        // Si le jet ne rapporte rien : on AFFICHE la perte sur place (les dés
+        // perdus restent visibles) et on attend que le joueur passe au suivant.
+        if (DS.turn.type === 'perdu') break;
+        if (!prevAllScored && prevKept.length) {
+          DS.keptByRoll.push({ jet: prevJet, dice: prevKept });
         }
+        break;
+      }
+      case 'dasser': {   // après un tour perdu, passer au joueur suivant (sans son)
+        if (DS.turn && DS.turn.type === 'perdu') dLose();
         break;
       }
       case 'stopdes': {   // encaisser
@@ -1036,10 +1041,7 @@ h1 span{color:var(--muted);font-weight:600}
         DS.steal = { sourcePlayer: vt.player, gainToSteal: vt.gain, leftoverDice: vt.leftoverDice };
         DS.turn = T.start(T.fresh(), vt.leftoverDice);
         DS.phase = 'steal';
-        DS.keptByRoll = [];
-        if (DS.turn.type === 'rolling' && DS.turn.kept && DS.turn.kept.length) {
-          DS.keptByRoll.push({ jet: DS.turn.lancers || 1, dice: DS.turn.kept });
-        }
+        DS.keptByRoll = [];   // le 1er jet de vol s'affiche via la main courante
         break;
       }
       case 'dresume':    // reprendre la partie aux dés en cours
@@ -1313,21 +1315,42 @@ h1 span{color:var(--muted);font-weight:600}
   // ---- Mode dés : rendu ---------------------------------------------------
   function dGlyph(v) { return DICE_GLYPH[v] || String(v); }
 
-  // Affiche les dés du lancer courant (gardés = grisés, à relancer = surlignés).
+  // Affiche les dés du lancer courant (gardés = couleur de jet, à relancer = gris).
+  // En état perdu, on montre les dés sans valeur (handLost) tous en gris.
   function diceRow(st) {
-    if (!st || st.type !== 'rolling') return '';
-    // Reconstruit la main affichée : chaque dé gardé porte la couleur de son jet,
-    // les dés du jet courant qui ne rapportent rien restent gris.
-    const keptDice = (DS.keptByRoll || [])
-      .reduce((acc, g) => acc.concat((g.dice || []).map(v => ({ v, jet: g.jet }))), []);
-    const toRoll = (st.toRoll || []).map(v => ({ v, jet: 0 }));
-    const hand = keptDice.concat(toRoll);
+    if (!st) return '';
+    const perdu = st.type === 'perdu';
+    // Perte : le jet ne rapporte rien, tous les dés sont gris + les dés déjà gardés.
+    if (perdu) {
+      const lost = (st.handLost || []).map(v => ({ v, jet: 0, kept: false }));
+      const keptByJet = (DS.keptByRoll || []).reduce(
+        (acc, g) => acc.concat((g.dice || []).map(v => ({ v, jet: g.jet, kept: true }))), []);
+      const hand = keptByJet.concat(lost);
+      if (!hand.length) return '';
+      const cells = hand.map(d => d.kept
+        ? `<span class="die kept" style="color:${jetColor(d.jet)};border-color:${jetColor(d.jet)}">${dGlyph(d.v)}</span>`
+        : `<span class="die gray">${dGlyph(d.v)}</span>`).join('');
+      return `<div class="dgrid"><div class="dgroup"><small>Perdu — ce jet ne rapporte rien</small><div class="div">${cells}</div></div></div>`;
+    }
+    if (st.type !== 'rolling') return '';
+    // Main complète (6 dés) : les dés tenus des jets précédents (gardés, colorés
+    // chacun de sa couleur de jet) + la main courante (gardés colorés, à relancer gris).
+    const keptByJet = (DS.keptByRoll || []).reduce(
+      (acc, g) => acc.concat((g.dice || []).map(v => ({ v, jet: g.jet, kept: true }))), []);
+    const curJet = st.lancers || 1;
+    const keptCur = (st.kept || []);
+    const current = (st.inHand || []).map(v => ({
+      v, jet: curJet, kept: keptCur.includes(v)
+    }));
+    const hand = keptByJet.concat(current);
     if (!hand.length) return '';
-    const cells = hand.map(d => d.jet === 0
+    const cells = hand.map(d => !d.kept
       ? `<span class="die gray">${dGlyph(d.v)}</span>`
       : `<span class="die kept" style="color:${jetColor(d.jet)};border-color:${jetColor(d.jet)}">${dGlyph(d.v)}</span>`
     ).join('');
-    return `<div class="dgrid"><div class="dgroup"><small>Dés gardés (par jet) · ${keptDice.length} · gris = à relancer</small><div class="div">${cells}</div></div></div>
+    const keptN = hand.filter(d => d.kept).length;
+    const grayN = hand.length - keptN;
+    return `<div class="dgrid"><div class="dgroup"><small>${keptN} gardé${keptN===1?'':'s'} · ${grayN} à relancer · une couleur par jet</small><div class="div">${cells}</div></div></div>
       ${dHint(st) ? `<p class="dhint">${dHint(st)}</p>` : ''}`;
   }
 
@@ -1421,7 +1444,7 @@ h1 span{color:var(--muted);font-weight:600}
     const rollDisabled = st.type !== 'rolling';
     const stopLabel = isSteal ? 'Prendre le vol' : 'Arrêter & encaisser';
     const buttons = st.type === 'perdu'
-      ? `<div class="actions"><button class="act ok" data-a="lancier">Au tour suivant</button></div>`
+      ? `<button class="act ok" style="width:100%" data-a="dasser">Au tour suivant</button>`
       : `<button class="clear" style="width:100%" data-a="rolldes" ${rollDisabled ? 'disabled' : ''}>Relancer les dés</button>
          <div class="actions"><button class="act ok" data-a="stopdes" ${canTake ? '' : 'disabled'}>${stopLabel}</button></div>`;
     const canTakeHint = (st.type === 'rolling' && !canTake)
@@ -1434,7 +1457,7 @@ h1 span{color:var(--muted);font-weight:600}
         <div>
           <div class="label">Tour de <b>${playerName}</b> · <span class="dstate">${statusInfo.txt}</span></div>
           <div class="dturn">
-            <span class="dlab">Tour</span><span class="damt">${fmt(st.score)}</span>
+            <span class="dlab">Tour</span><span class="damt">${fmt(st.type === 'perdu' ? 0 : (st.score || 0))}</span>
             ${isSteal ? `<span class="dgain">+ vol ${fmt(DS.steal.gainToSteal)} = ${fmt(turnTotal)}</span>` : ''}
             ${st.type === 'rolling' && st.gained ? `<span class="dgain">(+${fmt(st.gained)} ce lancer)</span>` : ''}
           </div>
