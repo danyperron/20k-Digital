@@ -1333,8 +1333,10 @@ h1 span{color:var(--muted);font-weight:600}
       return `<div class="dgrid"><div class="dgroup"><small>Perdu — ce jet ne rapporte rien</small><div class="div">${cells}</div></div></div>`;
     }
     if (st.type !== 'rolling') return '';
-    // Main complète (6 dés) : les dés tenus des jets précédents (gardés, colorés
-    // chacun de sa couleur de jet) + la main courante (gardés colorés, à relancer gris).
+    // Main complète (6 dés MAX, jamais plus) : les dés tenus des jets précédents
+    // (gardés, colorés par jet), puis la main courante (gardés colorés, à relancer gris).
+    // Si un jet « main pleine » relance les 6, on n'affiche JAMAIS les dés tenus d'une
+    // main antérieure en plus : on tronque à 6 pour respecter 6 dés au total.
     const keptByJet = (DS.keptByRoll || []).reduce(
       (acc, g) => acc.concat((g.dice || []).map(v => ({ v, jet: g.jet, kept: true }))), []);
     const curJet = st.lancers || 1;
@@ -1342,7 +1344,7 @@ h1 span{color:var(--muted);font-weight:600}
     const current = (st.inHand || []).map(v => ({
       v, jet: curJet, kept: keptCur.includes(v)
     }));
-    const hand = keptByJet.concat(current);
+    const hand = keptByJet.concat(current).slice(0, 6);
     if (!hand.length) return '';
     const cells = hand.map(d => !d.kept
       ? `<span class="die gray">${dGlyph(d.v)}</span>`
