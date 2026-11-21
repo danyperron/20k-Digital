@@ -886,7 +886,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.54';
+  const VERSION = '3.55';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -1413,6 +1413,7 @@ h1 span{color:var(--muted);font-weight:600}
       case 'obank': oDo('obank'); break;
       case 'olost': oDo('olost'); break;
       case 'oroll': oDo('oroll'); break;
+      case 'ovol': oDo('ovol'); break;
       case 'oinput': oDo('oinput', v); break;
       case 'osetp': oDo('osetp', v); break;
       case 'ogame': DS.screen = 'ogame'; break;
@@ -2014,7 +2015,7 @@ h1 span{color:var(--muted);font-weight:600}
     const swatches = PLAYER_COLORS.map(c =>
       `<span class="sw${c === cur ? ' on' : ''}" data-a="setcolor" data-v="${c}" style="background:${c}"></span>`).join('');
     return `<div class="peditor">
-      <input type="text" id="p-name" data-a="pfield" data-v="${esc(editingName || '')}" value="${esc(editingName || '')}" placeholder="Nom du joueur" maxlength="18">
+      <input type="text" id="p-name" value="${esc(editingName || '')}" placeholder="Nom du joueur" maxlength="18">
       <div class="pcolors">${swatches}</div>
       <div class="pbtns">
         <button class="act ok" data-a="psave" data-v="">Enregistrer</button>
@@ -2344,6 +2345,15 @@ h1 span{color:var(--muted);font-weight:600}
           ? `<div class="dmsg good">🎲 C'est à <b>vous</b> : lancez les dés ci-dessous.</div>`
           : `<div class="dmsg">🎲 Au tour de <b>${esc(g.names[g.current] || '?')}</b>…</div>`);
     const turnArea = OL.myTurn ? viewOMyTurn() : (g.turn && g.turn.type === 'rolling' ? showOTurn(g.turn) : '');
+    const jlog = (g.log || []).slice().reverse();
+    const journal = jlog.length ? `<details class="des-log" open><summary>Journal des tours (${jlog.length})</summary>
+      ${jlog.map((e, i1) => {
+        const nm = esc(g.names[e.i] || '?');
+        const lab = e.kind === 'vol-bank' ? 'VOL +' : e.kind === 'perdu' ? 'perdu' : 'ENC. +';
+        const cls = e.kind === 'perdu' ? ' none' : (e.kind === 'vol-bank' ? ' vol' : ' lv');
+        return `<div class="dlogrow"><span class="ln">T${jlog.length - i1}</span><span class="lnm">${nm}</span>
+          <span class="lv${cls}">${lab} ${fmt(e.amount || 0)}</span><span class="ls">= ${fmt(e.total || 0)}</span></div>`;
+      }).join('')}</details>` : '';
     return `<div class="app"><div class="ogame">
       <div class="top"><button class="tool" data-a="oleave">← Quitter</button>
         <span class="rcode small"><b>#${esc(OL.code)}</b></span></div>
@@ -2351,6 +2361,7 @@ h1 span{color:var(--muted);font-weight:600}
       ${banner}
       <div class="rows">${rows}</div>
       ${turnArea}
+      ${journal}
       <p class="version">Partie #${esc(OL.code)}</p>
     </div></div>`;
   }
@@ -2365,8 +2376,13 @@ h1 span{color:var(--muted);font-weight:600}
       const vt = OL.g && OL.g.prevTurn;
       const canOffer = OL.myTurn && vt && vt.gain > 0 && vt.player !== OL.g.current
         && myScore >= T.VOL_PASSEPORT && T.canVol(myScore, vt.gain, 0, DES_TARGET);
+      const ld = vt && vt.leftoverDice;
+      const volDice = (ld && ld.length) ? ld.length : 6;
+      const volMsg = canOffer
+        ? `<div class="dmsg good">🔓 Vol possible : partir de ${fmt(volDice)} dés restants de <b>${esc((OL.g.names[vt.player]) || '?')}</b> — gain ${fmt(vt.gain)} à copier.</div>` : '';
       return `<div class="dgrid"><div class="dgroup"><small>Prêt à lancer</small>
         <div class="div">${[1,2,3,4,5,6].map(v => dDie(v, false, '')).join('')}</div></div></div>
+        ${volMsg}
         <div class="actions" style="grid-template-columns:${canOffer ? '1fr 1fr' : '1fr'};margin-top:8px">
           ${canOffer ? `<button class="act purple" data-a="ovol">🔓 Voler ${fmt(vt.gain)}</button>` : ''}
           <button class="act ok" data-a="oroll">🎲 Lancer les dés</button>
@@ -2381,6 +2397,8 @@ h1 span{color:var(--muted);font-weight:600}
     // Dés tenus des jets antérieurs (colorés par jet).
     const keptHtml = (OL.keptByRoll || []).reduce((acc, g) =>
       acc.concat((g.dice || []).map(v => ({ v, jet: g.jet, kept: true }))), []);
+    // Nombre de dés qu'on va relancer : non gardés du lancer courant, ou 6 si tout a rapporté.
+    const diceLeft = tp.allScored ? 6 : ((tp.toRoll || []).length);
     let cells = '';
     if (perdu) {
       const lost = (tp.handLost || []).map(v => ({ v, jet: 0, kept: false }));
@@ -2389,17 +2407,27 @@ h1 span{color:var(--muted);font-weight:600}
       const keptBlock = keptHtml.length
         ? `<div class="dgroup"><small>Dés tenus (${keptHtml.length})</small><div class="div">${keptHtml.map(die).join('')}</div></div>` : '';
       const sense = inSteal ? 'Vol · ' : '';
+      const comb = (tp.combinaison && tp.combinaison !== 'unités') ? ` · <b>${esc(tp.combinaison)}</b>` : '';
+      const hint = tp.allScored ? `<p class="dhint">Tous les dés ont rapporté : on relance les 6.</p>`
+        : (diceLeft > 0 ? `<p class="dhint">${fmt(diceLeft)} dé${diceLeft > 1 ? 's' : ''} à relancer</p>` : '');
       cells = `${keptBlock}
-        <div class="dgroup"><small>${sense}Lancer n°${curJet} · celui-ci : ${fmt(tp.gained || 0)}</small><div class="div">${current.map(die).join('')}</div></div>
+        <div class="dgroup"><small>${sense}Lancer n°${curJet} · ${fmt(tp.gained || 0)} points${comb}</small><div class="div">${current.map(die).join('')}</div></div>
         ${tp.score >= 0 ? `<p class="dturn"><span class="dlab">Total du tour</span><span class="damt">${fmt(tp.score)}</span>
-          ${inSteal ? `<span class="dgain">(+ ${fmt(OL.stealGain || 0)} volés)</span>` : ''}</p>` : ''}`;
+          ${inSteal ? `<span class="dgain">(+ ${fmt(OL.stealGain || 0)} volés)</span>` : ''}</p>` : ''}
+        ${hint}`;
     }
     const canBank = !perdu && tp.score >= (inSteal ? DES_VOL_MIN_PROD : (myScore > 0 ? 1 : T.OUVRAGE));
+    const diceBadge = !perdu
+      ? `<span class="diceleft" style="color:${dieValueColor(diceLeft)};border-color:${dieValueColor(diceLeft)};background:${dieValueColor(diceLeft)}1f" title="Nombre de dés qu'on va relancer">${diceLeft} dés</span>` : '';
+    const volMsg = inSteal && OL.g && OL.g.prevTurn
+      ? `<div class="dmsg warn">🔓 Vol : tu repars des dés restants de <b>${esc((OL.g.names[OL.stealSource]) || '?')}</b> — gain ${fmt(OL.stealGain || 0)} à copier, produis au moins ${fmt(DES_VOL_MIN_PROD)}.</div>` : '';
     return `<div class="dgrid">${cells}</div>
+      <div class="dice-wrap"><span></span>${diceBadge}<button class="reroll" data-a="oroll" style="flex:1" ${perdu ? 'disabled' : ''}>${perdu ? 'Relancer / finir' : 'Relancer'}</button></div>
+      ${volMsg}
       <div class="actions" style="grid-template-columns:${perdu ? '1fr 1fr' : '1fr'};margin-top:8px">
         ${perdu
           ? `<button class="act slate" data-a="olost">Passer à ${esc((OL.g && OL.g.names[dNextI()]) || '')}</button>`
-          : `<button class="reroll" data-a="oroll" style="width:100%">Relancer</button>`}
+          : ''}
       </div>
       <div class="actions" style="grid-template-columns:1fr;margin-top:8px">
         <button class="act ok" data-a="obank" ${canBank ? '' : 'disabled'}>${inSteal ? 'Prendre le vol' : 'Arrêter & encaisser'}</button>
@@ -2421,8 +2449,9 @@ h1 span{color:var(--muted);font-weight:600}
     const current = (t.inHand || []).map(v => ({ v, jet: curJet, kept: keptCur.includes(v) }));
     const keptHtml = (OL.keptByRoll || []).reduce((acc, gr) => acc.concat((gr.dice || []).map(v => ({ v, jet: gr.jet, kept: true }))), []);
     const keptBlock = keptHtml.length ? `<div class="dgroup"><small>Dés tenus (${keptHtml.length})</small><div class="div">${keptHtml.map(die).join('')}</div></div>` : '';
+    const comb = (t.combinaison && t.combinaison !== 'unités') ? ` · <b>${esc(t.combinaison)}</b>` : '';
     return `<div class="dgrid">${keptBlock}
-      <div class="dgroup"><small>${esc(who)} · lancer n°${curJet} : ${fmt(t.gained || 0)}</small><div class="div">${current.map(die).join('')}</div></div>
+      <div class="dgroup"><small>${esc(who)} · lancer n°${curJet} : ${fmt(t.gained || 0)} pts${comb}</small><div class="div">${current.map(die).join('')}</div></div>
       <p class="dturn"><span class="dlab">Total du tour</span><span class="damt">${fmt(t.score || 0)}</span></p>
     </div>`;
   }
