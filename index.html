@@ -823,7 +823,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.35';
+  const VERSION = '3.36';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -1044,18 +1044,18 @@ h1 span{color:var(--muted);font-weight:600}
       case 'rolldes': {   // relancer les dés non gardés
         const st = DS.turn;
         if (!st || st.type !== 'rolling') break;
-        // Les dés gardés du jet qui vient de terminer sortent de la main et
-        // restent affichés (coloriés par jet). Sauf si TOUS ont rapporté (allScored) :
-        // ils ont été relancés, il ne reste donc rien de « tenu » à montrer.
-        const prevAllScored = st.allScored;
+        // Quand le jet précédent a rapporté sur TOUS ses dés (allScored), la
+        // relance rejoue les 6 dés : AUCUN dé n'est tenu, on vide keptByRoll.
+        // Sinon, les dés gardés de ce jet deviennent « tenus » (colorés par jet).
+        const prevAllScored = !!st.allScored;
         const prevKept = (st.kept || []);
         const prevJet = st.lancers || 1;
         DS.turn = T.roll(st);
-        // Si le jet ne rapporte rien : on AFFICHE la perte sur place (les dés
-        // perdus restent visibles) et on attend que le joueur passe au suivant.
         if (DS.turn.type === 'perdu') { recordJet('perdu'); break; }
         recordJet('roll');
-        if (!prevAllScored && prevKept.length) {
+        if (prevAllScored) {
+          DS.keptByRoll = [];
+        } else if (prevKept.length) {
           DS.keptByRoll.push({ jet: prevJet, dice: prevKept });
         }
         break;
