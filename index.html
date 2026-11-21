@@ -839,7 +839,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.42';
+  const VERSION = '3.46';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -969,17 +969,10 @@ h1 span{color:var(--muted);font-weight:600}
       players: [{ score: 12050, last: 450 }, { score: 20000, last: 200 }],
       winner: 1, jets: 27
     });
-    // Une partie en cours reprenable (aucun gagnant) — on reste sur l'accueil
-    // (setup-des) pour que la carte « Reprendre la partie » s'affiche.
-    DS.screen = 'setup-des'; DS.count = 3;
-    DS.names = ['Alice', 'Bob', 'Charlie'];
-    DS.players = DS.names.map(nm => ({ score: 0, last: null }));
-    DS.players[0].score = 8725; DS.players[0].last = 150;
-    DS.players[1].score = 12400; DS.players[1].last = 0;
-    DS.players[2].score = 6100; DS.players[2].last = 300;
-    DS.current = 2; DS.winner = null; DS.prevTurn = { player: 2, gain: 300, leftoverDice: [2, 5] };
-    DS.turn = null; DS.phase = 'idle'; DS.steal = null; DS.log = []; DS.keptByRoll = [];
-    DS.jetLog = []; DS.gameId = 2;
+    // Pas de partie en cours injectée : la démo ne doit pas « prêter » ses noms
+    // (Alice/Bob/…) à une vraie nouvelle partie. La carte « Reprendre » n'apparaît
+    // donc que pour une vraie partie interrompue, et « Commencer une partie »
+    // propose les noms par défaut (Joueur 1, Joueur 2, …).
     try { localStorage.setItem(KEY_DEMO, '1'); } catch (e) {}
     saveDes();
   }
@@ -987,9 +980,34 @@ h1 span{color:var(--muted);font-weight:600}
   // partie en cours, aucun joueur, aucun historique) : jamais sur une vraie
   // partie déjà commencée, ni une fois l'exemple déjà posé (KEY_DEMO).
   function neverSeeded() { try { return !localStorage.getItem(KEY_DEMO); } catch (e) { return false; } }
+
+  // Nettoyage d'une ancienne démo résiduelle (versions 3.42+ ) : elle avait
+  // injecté une « partie en cours » Alice/Bob/Charlie dont les noms se
+  // propageaient aux nouvelles parties. Si on détecte cette partie fantôme
+  // (joueurs nommés uniquement parmi {Alice, Bob, Charlie}, issus de la démo),
+  // on la retire (l'historique est conservé) pour revenir à un accueil propre.
+  function stripDemoResume() {
+    try {
+      const gm = DS.names, pl = DS.players;
+      if (!Array.isArray(pl) || !pl.length) return;
+      const demoNames = new Set(['Alice', 'Bob', 'Charlie']);
+      const isDemo = Array.isArray(gm)
+        && gm.every(n => demoNames.has(n))
+        && pl.length === gm.length && gm.length >= 1 && gm.length <= 3;
+      if (isDemo) {
+        DS.names = []; DS.players = []; DS.count = 4; DS.current = 0;
+        DS.screen = 'setup-des';
+        DS.prevTurn = null; DS.turn = null; DS.phase = 'idle'; DS.steal = null;
+        DS.log = []; DS.keptByRoll = []; DS.jetLog = [];
+        saveDes();
+      }
+    } catch (e) {}
+  }
+
   if (!DS.stats.length && DS.screen === 'setup-des' && !DS.names.length && !DS.players.length && neverSeeded()) {
     seedDesDemo();
   }
+  stripDemoResume();
   const inDesMode = () => MODE === 'des' && (DS.screen === 'setup-des' || DS.screen === 'game-des');
 
   // ---- Actions du mode dés -----------------------------------------------
