@@ -149,6 +149,9 @@ h1 span{color:var(--muted);font-weight:600}
 .reroll{height:46px;padding:0 16px;border-radius:12px;border:0;background:var(--good);color:var(--on-strong);font-weight:700;font-size:16px;flex:none;box-shadow:0 2px 0 var(--shadow);transition:transform .08s}
 .reroll:active:not(:disabled){transform:scale(.95)}
 .reroll:disabled{background:var(--surface-2);color:var(--muted);border:1px solid var(--line)}
+.topctr{display:flex;align-items:center;gap:8px;flex:none}
+.diceleft{height:46px;padding:0 12px;border-radius:12px;background:var(--accent-soft);border:1.5px solid var(--accent);color:var(--accent);
+  font-weight:700;font-size:15px;font-variant-numeric:tabular-nums;display:inline-flex;align-items:center;white-space:nowrap}
 .dstate{font-size:13px;color:var(--muted);line-height:1.4}
 .dstate b{color:var(--fg)}
 .dturn{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
@@ -823,7 +826,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.36';
+  const VERSION = '3.37';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -1465,20 +1468,28 @@ h1 span{color:var(--muted);font-weight:600}
     const isSteal = currentPhase === 'steal';
     const nextName = DS.names.length ? esc(DS.names[dNext(DS.current)]) : '';
 
-    // En-tête commun + bouton principal (haut à droite, coloré).
+    // En-tête commun + bouton principal (haut à droite, coloré) + badge « dés à tirer ».
+    // Nombre de dés qu'on va relancer : les non gardés du lancer courant ; en
+    // main pleine (allScored) on relance les 6.
+    let diceLeft = 0;
     let topBtn, topLabel, topAction;
     if (isIdle) {
       topLabel = '🎲 Lancer les dés';
       topAction = 'lancier';
+      diceLeft = 6;
     } else if (st.type === 'perdu') {
       topLabel = '';
       topAction = '';
     } else {
       topLabel = '🎲 Relancer les dés';
       topAction = 'rolldes';
+      diceLeft = st.allScored ? 6 : ((st.toRoll || []).length);
     }
+    const diceBadge = topAction
+      ? `<span class="diceleft" title="Nombre de dés qui seront lancés">${diceLeft} dés</span>`
+      : '';
     topBtn = topAction
-      ? `<button class="reroll" data-a="${topAction}" ${st && st.type !== 'rolling' ? 'disabled' : ''}>${topLabel}</button>`
+      ? `<div class="topctr">${diceBadge}<button class="reroll" data-a="${topAction}" ${st && st.type !== 'rolling' ? 'disabled' : ''}>${topLabel}</button></div>`
       : '';
 
     // Total + état du tour.
