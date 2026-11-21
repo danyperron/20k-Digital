@@ -883,7 +883,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.49';
+  const VERSION = '3.50';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -1403,6 +1403,15 @@ h1 span{color:var(--muted);font-weight:600}
         } catch (e) { flash('warn', 'Export', 'Impossible de copier l\'historique.'); }
         break;
       }
+      case 'online': oDo('online'); break;
+      case 'ocreate': oDo('ocreate'); break;
+      case 'ojoin': oDo('ojoin'); break;
+      case 'oleave': oDo('oleave'); break;
+      case 'obank': oDo('obank'); break;
+      case 'olost': oDo('olost'); break;
+      case 'oroll': oDo('oroll'); break;
+      case 'oinput': oDo('oinput', v); break;
+      case 'ogame': DS.screen = 'ogame'; break;
       default: break;
     }
     saveDes(); render();
@@ -1967,6 +1976,7 @@ h1 span{color:var(--muted);font-weight:600}
         <li>Objectif exact : <b>${fmt(20000)}</b></li>
       </ul>
       <button class="go" data-a="start" ${goDisabled ? 'disabled' : ''}>Commencer la partie (${sel.length} joueur${sel.length===1?'':'s'})</button>
+      <button class="act slate" data-a="online" style="width:100%">🌐 Jouer en ligne</button>
       <p class="version">Version ${VERSION}</p>
     </div></div>`;
   }
@@ -2107,12 +2117,232 @@ h1 span{color:var(--muted);font-weight:600}
     </div>`;
   }
 
+  // ============================ MODE EN LIGNE ==============================
+  // Jeu multijoueur temps réel : un hôte crée une partie (code à 4 chiffres),
+  // les autres la rejoignent. Le serveur détient l'autorité des scores et du
+  // tour ; chaque joueur exécute son propre tour localement et envoie le
+  // résultat (bank/lost) au serveur qui le diffuse à tous.
+  const ONLINE_WS = (function () {
+    try { const saved = localStorage.getItem('20k-ws');
+      if (saved && /^wss?:\/\//.test(saved)) return saved; } catch (e) {}
+    return 'ws://127.0.0.1:8770/room/m';   // défaut : serveur de développement local
+  })();
+  const OL = {
+    ws: null, connected: false, myIndex: -1, code: '', members: [],
+    g: null, seq: 0, error: '', myTurn: false, turnProxy: null, lastSeq: 0,
+    order: '', stealGain: 0, keptByRoll: [], leaving: false
+  };
+  function olSend(o) { if (OL.ws && OL.ws.readyState === 1) OL.ws.send(JSON.stringify(o)); }
+  function olLog(m) {}
+  function olConnect(action) {
+    if (OL.connected) return;
+    let W = null;
+    try { W = window.WebSocket; } catch (e) {}
+    if (!W) { OL.error = 'WebSocket non supporté sur ce navigateur.'; render(); return; }
+    let conn;
+    try { conn = new W(ONLINE_WS); } catch (e) { OL.error = 'Connexion impossible.'; render(); return; }
+    OL.ws = conn;
+    conn.onopen = () => {
+      OL.connected = true;
+      const who = olMyName();
+      const color = olMyColor();
+      if (action === 'create') olSend({ type: 'create', name: who, color });
+      else olSend({ type: 'join', name: who, color, code: OL.order });
+    };
+    conn.onmessage = e => { try { olHandle(JSON.parse(e.data)); } catch (err) {} };
+    conn.onclose = () => { OL.connected = false; OL.ws = null;
+      if (!OL.leaving) { OL.error = 'Impossible de joindre le serveur en ligne. Déployez le serveur (dev/README-online.md) puis configurez son URL dans localStorage[\'20k-ws\'].'; }
+      OL.leaving = false;
+      render(); };
+    conn.onerror = () => { OL.error = 'Connexion au serveur impossible.'; render(); };
+  }
+  function olMyName() {
+    // Prend le premier joueur du répertoire local, sinon « Moi ».
+    if (roster && roster.players && roster.players.length) return roster.players[0].name;
+    return 'Moi';
+  }
+  function olMyColor() {
+    if (roster && roster.players && roster.players.length) return roster.players[0].color;
+    return '#1f5fd6';
+  }
+  function olDisconnect() {
+    OL.leaving = true;
+    try { if (OL.ws) OL.ws.close(); } catch (e) {}
+    OL.ws = null; OL.connected = false; OL.myIndex = -1; OL.code = ''; OL.members = [];
+    OL.g = null; OL.myTurn = false; OL.turnProxy = null; OL.leaving = false;
+  }
+  function olHandle(msg) {
+    switch (msg.type) {
+      case 'created': OL.code = msg.code; OL.myIndex = msg.playerIndex; OL.members = msg.members || []; DS.screen = 'host'; break;
+      case 'welcome': OL.code = msg.code; OL.myIndex = msg.playerIndex; OL.members = msg.members || []; DS.screen = 'ogame'; break;
+      case 'state': OL.g = msg.g; OL.seq = msg.seq; OL.members = (msg.g && msg.g.members) || OL.members; refreshMyTurn(); maybeStart(); break;
+      case 'turn': OL.g = msg.g; OL.seq = msg.seq; refreshMyTurn(); break;
+      case 'peerState': OL.members = msg.members || OL.members; refreshMyTurn(); maybeStart(); break;
+      case 'error': OL.error = msg.msg || msg.title || ''; break;
+      case 'createdHost': break;
+    }
+    render();
+  }
+  function refreshMyTurn() {
+    if (!OL.g) { OL.myTurn = false; return; }
+    OL.myTurn = (OL.myIndex === OL.g.current) && OL.g.winner === null;
+  }
+  function onlineCount() { return OL.members.filter(m => m.online !== false).length; }
+  function maybeStart() {
+    if (DS.screen === 'host' && onlineCount() >= 2) DS.screen = 'ogame';
+  }
+  // ---- Actions en ligne ----
+  function oDo(action, v) {
+    switch (action) {
+      case 'online': OL.order = ''; OL.error = ''; DS.screen = 'ojoin'; break;
+      case 'ocreate': OL.error = ''; olConnect('create'); break;
+      case 'ojoin': OL.error = ''; olConnect('join'); break;
+      case 'oinput': OL.order = String(v == null ? '' : v).slice(0, 4); break;
+      case 'oleave': olDisconnect(); DS.screen = 'setup-des'; break;
+      case 'obank': {  // le joueur actif encaisse depuis son tour local
+        const t = OL.turnProxy;
+        if (!t || !OL.myTurn) break;
+        OL.turnProxy = null;
+        olSend({ type: 'action', seq: ++OL.lastSeq, act: { type: 'bank', production: t.score || 0, gain: OL.stealGain || 0, leftoverDice: (t.toRoll || []).slice() } });
+        OL.stealGain = 0; OL.myTurn = false;
+        break;
+      }
+      case 'olost': {  // le joueur actif perd son tour
+        OL.turnProxy = null;
+        olSend({ type: 'action', seq: ++OL.lastSeq, act: { type: 'lost' } });
+        OL.myTurn = false;
+        break;
+      }
+      case 'oroll': {  // le joueur actif lance / relance ses dés localement
+        if (!OL.turnProxy) OL.turnProxy = T.start(T.fresh());
+        else {
+          const prevAllScored = !!OL.turnProxy.allScored;
+          const prevKept = (OL.turnProxy.kept || []);
+          OL.turnProxy = T.roll(OL.turnProxy);
+          // On ne garde pas les dés tenus pour l'affichage en ligne (relais simple).
+          if (prevAllScored) OL.keptByRoll = [];
+        }
+        // Relaie le tour courant pour que les autres voient le lancer.
+        olSend({ type: 'action', seq: ++OL.lastSeq, act: { type: 'turn', turn: OL.turnProxy } });
+        break;
+      }
+      case 'okey': {  // garder une valeur (non implémenté en ligne v1 : tout est relancé) ; relance simple
+        if (!OL.turnProxy) break;
+        break;
+      }
+    }
+  }
+  function viewOJoin() {
+    return `<div class="app"><div class="setup">
+      <h1>20K <span>en ligne</span></h1>
+      ${OL.error ? `<div class="dmsg bad">${esc(OL.error)}</div>` : ''}
+      <p class="dsub">Jouez la même partie à plusieurs appareils. Un hôte crée la partie
+        (un code à 4 chiffres s'affiche), les autres la rejoignent avec ce code.</p>
+      <div><h2>Créer une partie</h2>
+        <button class="act ok" style="width:100%" data-a="ocreate">Créer une partie</button></div>
+      <div><h2>Rejoindre une partie</h2>
+        <input type="text" id="o-code" autocomplete="off" inputmode="numeric" maxlength="4"
+          placeholder="Code à 4 chiffres" value="${esc(OL.order || '')}" style="text-align:center;letter-spacing:.2em;font:700 22px var(--num)">
+        <button class="act slate" style="width:100%;margin-top:8px" data-a="ojoin">Rejoindre</button>
+      </div>
+      <button class="linkbtn" style="margin-top:10px" data-a="backdes">← Retour à l\'accueil</button>
+      <p class="version">Serveur : ${esc(ONLINE_WS)}</p>
+    </div></div>`;
+  }
+  function viewOHost() {
+    const on = OL.members.filter(m => m.online !== false);
+    return `<div class="app"><div class="setup">
+      <h1>20K <span>en ligne</span></h1>
+      <div class="rcode"><small>Code de la partie</small><b>${esc(OL.code)}</b></div>
+      <p class="dsub">Partagez ce code à 4 chiffres : les autres se connectent et rejoignent cette partie.</p>
+      <div><h2>Joueurs dans la partie (${on.length})</h2>
+        <div class="plist">${OL.members.map((m, i) => orientii(m)).join('') || '<p class="dsub">En attente de joueurs…</p>'}</div>
+      </div>
+      ${on.length >= 2 ? `<button class="act ok" style="width:100%" data-a="ogame">Commencer la partie</button>` : '<p class="dsub">Il faut au moins 2 joueurs pour commencer.</p>'}
+      <button class="linkbtn" style="margin-top:10px" data-a="oleave">Quitter la partie</button>
+    </div></div>`;
+  }
+  function orientii(m) {
+    const marks = { 0: '👑', 1: '🎲', 2: '🎯', 3: '⭐', 4: '💠', 5: '🔥' };
+    return `<div class="prow"><span class="avat" style="background:${m.color || '#5d6878'}">${esc((m.name || '?')[0].toUpperCase())}</span>
+      <div class="pinfo"><b>${marks[m.index] || '•'} ${esc(m.name)}${m.index === OL.myIndex ? ' <em>(vous)</em>' : ''}</b>
+      <small>${m.online !== false ? 'en ligne' : 'hors ligne'}</small></div></div>`;
+  }
+  function viewOGame() {
+    if (!OL.g) return `<div class="app"><div class="setup"><h1>20K <span>en ligne</span></h1><p class="dsub">Connexion…</p>
+      <button class="linkbtn" data-a="oleave">Quitter</button></div></div>`;
+    const g = OL.g;
+    const rows = g.names.map((nm, i) => {
+      const act = i === g.current && g.winner === null;
+      const won = i === g.winner;
+      const score = g.players[i] ? g.players[i].score : 0;
+      return `<section class="row${act ? ' active' : ''}${won ? ' won' : ''}" id="orow-${i}">
+        <div class="who"><div class="namewrap"><span class="dot"></span><span class="name">${esc(nm)}</span></div>
+          <div class="meta">${OL.members[i] ? (OL.members[i].online === false ? 'hors ligne' : 'en ligne') : ''}</div></div>
+        <div class="nums"><div class="num"><small>Points</small><b>${fmt(score)}</b></div>
+          <div class="num rem"><small>Restant</small><b>${won ? 'Gagnant!' : fmt(DES_TARGET - score)}</b></div></div>
+      </section>`;
+    }).join('');
+    const banner = g.winner !== null
+      ? `<div class="dmsg good">🏆 <b>${esc(g.names[g.winner])}</b> gagne la partie en ligne !</div>`
+      : (OL.myTurn
+          ? `<div class="dmsg good">🎲 C'est à <b>vous</b> : lancez les dés ci-dessous.</div>`
+          : `<div class="dmsg">🎲 Au tour de <b>${esc(g.names[g.current] || '?')}</b>…</div>`);
+    const turnArea = OL.myTurn ? viewOMyTurn() : (g.turn && g.turn.type === 'rolling' ? showOTurn(g.turn) : '');
+    return `<div class="app"><div class="ogame">
+      <div class="top"><button class="tool" data-a="oleave">← Quitter</button>
+        <span class="rcode small"><b>#${esc(OL.code)}</b></span></div>
+      <h1>20K <span>en ligne</span></h1>
+      ${banner}
+      <div class="rows">${rows}</div>
+      ${turnArea}
+      <p class="version">Partie #${esc(OL.code)}</p>
+    </div></div>`;
+  }
+  function viewOMyTurn() {
+    // Le joueur actif joue son tour avec le moteur de dés local.
+    if (!OL.turnProxy) OL.turnProxy = T.start(T.fresh());
+    const tp = OL.turnProxy;
+    const die = (d) => d.kept
+      ? dDie(d.v, true, jetColor(d.jet))
+      : dDie(d.v, false, '');
+    const perdu = tp.type === 'perdu';
+    const curJet = tp.lancers || 1;
+    const keptCur = (tp.kept || []);
+    const current = (tp.inHand || []).map(v => ({ v, jet: curJet, kept: keptCur.includes(v) }));
+    let cells = '';
+    if (perdu) {
+      const lost = (tp.handLost || []).map(v => ({ v, jet: 0, kept: false }));
+      cells = `<div class="dgroup"><small>Lancer perdant (aucun point)</small><div class="div">${lost.map(die).join('')}</div></div>`;
+    } else {
+      cells = `<div class="dgroup"><small>Lancer n°${curJet} · celui-ci : ${fmt(tp.score || 0)}</small><div class="div">${current.map(die).join('')}</div></div>`;
+    }
+    const myScore = (OL.g && OL.g.players && OL.g.players[OL.myIndex]) ? OL.g.players[OL.myIndex].score : 0;
+    const canBank = !perdu && tp.score >= (myScore > 0 ? 1 : T.OUVRAGE);
+    return `<div class="dgrid">${cells}</div>
+      <div class="dice-wrap"><span></span><button class="reroll" data-a="oroll" ${perdu ? 'disabled' : ''}>${perdu ? 'Relancer / finir' : 'Relancer'}</button></div>
+      <div class="actions" style="grid-template-columns:1fr 1fr;margin-top:8px">
+        <button class="act ok" data-a="obank" ${canBank ? '' : 'disabled'}>Arrêter & encaisser</button>
+        ${perdu ? `<button class="act slate" data-a="olost">Passer à ${esc(OL.g.names[dNextI()])}</button>` : ''}
+      </div>`;
+  }
+  function dNextI() { const n = (OL.g && OL.g.names.length) || 0; return n ? (OL.g.current + 1) % n : 0; }
+  function showOTurn(t) {
+    if (!t || t.type !== 'rolling') return '';
+    const curJet = t.lancers || 1;
+    const keptCur = (t.kept || []);
+    const current = (t.inHand || []).map(v => ({ v, jet: curJet, kept: keptCur.includes(v) }));
+    const die = (d) => d.kept ? dDie(d.v, true, jetColor(d.jet)) : dDie(d.v, false, '');
+    return `<div class="dgrid"><div class="dgroup"><small>${esc(OL.g.names[OL.g.current] || '')} lance · ${fmt(t.score || 0)}</small><div class="div">${current.map(die).join('')}</div></div></div>`;
+  }
+
   const root = document.getElementById('root');
   function render() {
     // Cette version est dédiée au jeu de dés (mode tableau retiré de l'UI) :
     // la page principale est l'écran dés (accueil sans partie, ou jeu en cours).
     if (!inDesMode()) { MODE = 'des'; saveMode(); if (!DS.screen) DS.screen = 'setup-des'; }
-    root.innerHTML = DS.screen === 'game-des' ? viewGameDes() : DS.screen === 'roster' ? viewRoster() : viewSetupDes();
+    root.innerHTML = DS.screen === 'game-des' ? viewGameDes() : DS.screen === 'roster' ? viewRoster()
+    : DS.screen === 'ojoin' ? viewOJoin() : DS.screen === 'host' ? viewOHost() : DS.screen === 'ogame' ? viewOGame() : viewSetupDes();
     const panel = document.getElementById('panel');
     document.documentElement.style.setProperty('--panel-h', (panel ? panel.offsetHeight : 0) + 'px');
   }
@@ -2139,6 +2369,8 @@ h1 span{color:var(--muted);font-weight:600}
     if (di !== undefined && inDesMode()) renameDes(+di, e.target.value);
     const pn = e.target && e.target.id === 'p-name';
     if (pn) editingName = e.target.value.slice(0, 18);
+    const oc = e.target && e.target.id === 'o-code';
+    if (oc) OL.order = e.target.value.replace(/\D/g, '').slice(0, 4);
   });
   document.addEventListener('change', e => {
     const pn = e.target && e.target.id === 'p-name';
