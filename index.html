@@ -229,6 +229,14 @@ h1 span{color:var(--muted);font-weight:600}
 .resume.des b{color:var(--good)}
 .resume.des svg{color:var(--good)}
 .resume .rt2{flex:none;font-size:20px}
+.past{margin-top:2px}
+.past h2{font-size:15px;margin:0 0 10px;font-weight:600}
+.pastrow{display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px 14px;color:var(--fg);margin-bottom:8px;transition:transform .08s}
+.pastrow:active{transform:scale(.985)}
+.pastrow .rt{flex:1;min-width:0}
+.pastrow b{display:block;font-size:15px;color:var(--good)}
+.pastrow small{display:block;margin-top:2px;font-size:13px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pastrow svg{flex:none;width:18px;height:18px;color:var(--muted)}
 
 /* Journal des tours */
 .sheet{position:fixed;inset:0;z-index:20;background:var(--bg);display:flex;flex-direction:column;overscroll-behavior:contain}
@@ -831,7 +839,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.38';
+  const VERSION = '3.39';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -888,7 +896,7 @@ h1 span{color:var(--muted);font-weight:600}
       screen: 'setup-des', count: 4, names: [], players: [],
       current: 0, winner: null, prevTurn: null,
       turn: null, phase: 'idle', steal: null, log: [], keptByRoll: [],
-      gameId: 1, jetLog: []
+      gameId: 1, jetLog: [], stats: []
     };
   }
   function loadDes() {
@@ -899,7 +907,13 @@ h1 span{color:var(--muted);font-weight:600}
       const players = Array.isArray(raw.players) ? raw.players.map(p =>
         (!p || typeof p.score !== 'number') ? { score: 0, last: null } : {
           score: p.score, last: typeof p.last === 'number' ? p.last : null }) : [];
-      if (!(raw.screen === 'game-des') || !players.length) return d;
+      if (!(raw.screen === 'game-des') || !players.length) {
+        // En écran de config (ou partie sans joueur), on conserve quand même
+        // l'historique et le compteur de parties pour l'affichage de l'accueil.
+        d.stats = Array.isArray(raw.stats) ? raw.stats.filter(s => s && typeof s.ts === 'number') : [];
+        d.gameId = Number.isInteger(raw.gameId) ? raw.gameId : 1;
+        return d;
+      }
       d.screen = 'game-des';
       d.players = players;
       d.names = Array.isArray(raw.names) ? raw.names.map((n, i) => (typeof n === 'string' && n.trim()) ? n : 'Joueur ' + (i + 1)) : [];
@@ -916,6 +930,7 @@ h1 span{color:var(--muted);font-weight:600}
       d.keptByRoll = Array.isArray(raw.keptByRoll) ? raw.keptByRoll.filter(g => g && Number.isInteger(g.jet)) : [];
       d.gameId = Number.isInteger(raw.gameId) ? raw.gameId : 1;
       d.jetLog = Array.isArray(raw.jetLog) ? raw.jetLog.filter(e => e && typeof e.n === 'number') : [];
+      d.stats = Array.isArray(raw.stats) ? raw.stats.filter(s => s && typeof s.ts === 'number') : [];
       return d;
     } catch (e) {}
     return null;
@@ -959,6 +974,7 @@ h1 span{color:var(--muted);font-weight:600}
     });
     dAdvance();
     if (DS.winner !== null) {
+      dArchive();
       if (S.sound !== false) { victory(); say(DS.names[DS.winner] + ' gagne avec ' + E.fmt(DES_TARGET) + ' points!', null); }
     }
     DS.turn = null; DS.phase = 'idle'; DS.steal = null;
@@ -997,6 +1013,19 @@ h1 span{color:var(--muted);font-weight:600}
     });
   }
   function resetJetLog() { DS.jetLog = []; }
+  // Archive une partie terminée dans l'historique (stats) des parties.
+  function dArchive() {
+    DS.stats.push({
+      ts: Date.now(),           // date de fin
+      g: DS.gameId,             // numéro de partie
+      v: VERSION,               // version utilisée
+      names: DS.names.slice(),
+      players: DS.players.map(p => ({ score: p.score, last: p.last })),
+      winner: DS.winner,
+      jets: DS.jetLog.length    // nb de jets enregistrés
+    });
+    DS.gameId = DS.gameId + 1;  // prochaine partie
+  }
   function dVolOffer() {
     if (DS.phase !== 'idle' || DS.turn) return false;   // seulement avant le lancer d'un tour
     if (DS.screen !== 'game-des') return false;
@@ -1004,7 +1033,6 @@ h1 span{color:var(--muted);font-weight:600}
     const p = DS.players[DS.current];
     const vt = DS.prevTurn;
     if (!vt || vt.gain <= 0 || vt.player === DS.current) return false;
-    if (!vt.leftoverDice || vt.leftoverDice.length === 0) return false;
     return T.canVol(p.score, vt.gain, 0, DES_TARGET);
   }
   function dStealReason() {
@@ -1013,7 +1041,6 @@ h1 span{color:var(--muted);font-weight:600}
     const vt = DS.prevTurn;
     if (!vt || vt.gain <= 0) return 'Aucun gain à voler';
     if (vt.player === DS.current) return '';
-    if (!vt.leftoverDice || vt.leftoverDice.length === 0) return 'Le joueur a consommé tous ses dés';
     if (p.score < T.VOL_PASSEPORT) return 'Nécessite ' + E.fmt(T.VOL_PASSEPORT) + ' points minimum';
     if (T.canVol(p.score, vt.gain, 0, DES_TARGET)) return '';
     return 'Pas assez de place pour voler ' + E.fmt(vt.gain) + ' + 50';
@@ -1035,6 +1062,20 @@ h1 span{color:var(--muted);font-weight:600}
         DS.names = Array.from({ length: n }, (_, i) => DS.names[i] || `Joueur ${i + 1}`);
         DS.players = DS.names.map(nm => ({ score: 0, last: null }));
         DS.names = DS.names.slice(0, n);
+        DS.current = 0; DS.winner = null; DS.prevTurn = null;
+        DS.turn = null; DS.phase = 'idle'; DS.steal = null; DS.log = []; DS.keptByRoll = [];
+        DS.jetLog = [];
+        if (DS.gameId <= 0) DS.gameId = 1;
+        DS.screen = 'game-des';
+        break;
+      }
+      case 'dereplay': {   // relancer une partie passée avec les mêmes joueurs
+        const idx = +v;
+        const past = DS.stats[idx];
+        if (!past || !Array.isArray(past.names) || !past.names.length) break;
+        DS.names = past.names.slice();
+        DS.players = past.players.map(p => ({ score: 0, last: null }));
+        DS.count = DS.names.length;
         DS.current = 0; DS.winner = null; DS.prevTurn = null;
         DS.turn = null; DS.phase = 'idle'; DS.steal = null; DS.log = []; DS.keptByRoll = [];
         DS.jetLog = [];
@@ -1103,8 +1144,12 @@ h1 span{color:var(--muted);font-weight:600}
       case 'volerd': {    // démarrer une phase de vol sur les dés restants du précédent
         const vt = DS.prevTurn;
         if (!dVolOffer() || !vt) break;
-        DS.steal = { sourcePlayer: vt.player, gainToSteal: vt.gain, leftoverDice: vt.leftoverDice };
-        DS.turn = T.start(T.fresh(), vt.leftoverDice);
+        // On repart des dés restants du précédent ; s'il n'en a laissé aucun,
+        // on lui ré-attribue une main neuve de 6 dés (règle vol ré-attribué).
+        const hand = (vt.leftoverDice && vt.leftoverDice.length)
+          ? vt.leftoverDice : undefined;
+        DS.steal = { sourcePlayer: vt.player, gainToSteal: vt.gain, leftoverDice: hand };
+        DS.turn = T.start(T.fresh(), hand);
         DS.phase = 'steal';
         DS.keptByRoll = [];   // le 1er jet de vol s'affiche via la main courante
         if (DS.turn.type === 'rolling') recordJet('vol');
@@ -1496,7 +1541,8 @@ h1 span{color:var(--muted);font-weight:600}
         // Un vol est possible : c'est l'action principale, en évidence.
         topLabel = `🔓 Voler ${fmt(DS.prevTurn.gain)}`;
         topAction = 'volerd';
-        diceLeft = DS.prevTurn.leftoverDice ? DS.prevTurn.leftoverDice.length : 0;
+        const ld = DS.prevTurn.leftoverDice;
+        diceLeft = (ld && ld.length) ? ld.length : 6;   // 6 dés si rien n'a été laissé
       } else {
         topLabel = '🎲 Lancer les dés';
         topAction = 'lancier';
@@ -1642,6 +1688,16 @@ h1 span{color:var(--muted);font-weight:600}
         <span class="rt"><b>Reprendre la partie en cours</b>
         <small>${lead}${DS.players.length > 4 ? ' …' : ''}</small></span>${ICON.chev}
       </button>` : ''}
+      ${DS.stats.length ? `<div class="past"><h2>Parties terminées</h2>
+        ${DS.stats.slice().reverse().map((g, ri) => {
+          const idx = DS.stats.length - 1 - ri;
+          const date = new Date(g.ts).toLocaleDateString('fr-CA', { day: 'numeric', month: 'short' });
+          const winName = esc(g.names[g.winner] || '?');
+          const scores = g.players.map((p, i) => `${esc(g.names[i] || 'J')} ${fmt(p.score)}`).join(' · ');
+          return `<button class="pastrow" data-a="dereplay" data-v="${idx}">
+            <span class="rt"><b>🏆 ${winName}</b><small>${date} · ${scores} · ${g.jets} jet${g.jets===1?'':'s'}</small></span>${ICON.chev}
+          </button>`;
+        }).join('')}</div>` : ''}
       <div><h2>Nombre de joueurs</h2><div class="count">${counts}</div></div>
       <ul class="rules">
         <li>6 dés : garde les dés qui rapportent, relance le reste</li>
