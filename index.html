@@ -26,6 +26,7 @@
   --bad:#c9302c; --bad-soft:#fbe8e7;
   --warn:#d06d10; --warn-soft:#fdf0e1;
   --purple:#7a3fc4; --key:#2a3341;
+  --pass:#5b6b8c; --pass-soft:#e7ecf5;
   --gold:#a56600; --gold-2:#b4500f;
   --ui:"Barlow",system-ui,-apple-system,"Segoe UI",sans-serif;
   --num:"Barlow Semi Condensed","Barlow",system-ui,-apple-system,sans-serif;
@@ -35,14 +36,16 @@
   --fg:#e8edf4; --muted:#9aa6b6; --shadow:rgba(0,0,0,.45);
   --accent:#6f9dff; --accent-soft:#1b2a45; --good:#3fb96c; --good-soft:#15301f;
   --bad:#e9554e; --bad-soft:#3a1a19; --warn:#e48d33; --warn-soft:#3a2813;
-  --purple:#b892ff; --key:#35404f; color-scheme:dark;
+  --purple:#b892ff; --key:#35404f;
+  --pass:#8b9cc2; --pass-soft:#232c3a; color-scheme:dark;
 }}
 :root[data-theme="dark"]{
   --bg:#0f141b; --surface:#171e28; --surface-2:#1e2632; --line:#2c3644;
   --fg:#e8edf4; --muted:#9aa6b6; --shadow:rgba(0,0,0,.45);
   --accent:#6f9dff; --accent-soft:#1b2a45; --good:#3fb96c; --good-soft:#15301f;
   --bad:#e9554e; --bad-soft:#3a1a19; --warn:#e48d33; --warn-soft:#3a2813;
-  --purple:#b892ff; --key:#35404f; color-scheme:dark;
+  --purple:#b892ff; --key:#35404f;
+  --pass:#8b9cc2; --pass-soft:#232c3a; color-scheme:dark;
 }
 *{box-sizing:border-box}
 html{padding-top:env(safe-area-inset-top,0px);color-scheme:light}
@@ -140,6 +143,9 @@ h1 span{color:var(--muted);font-weight:600}
 .pass{background:var(--bad)}
 .ok{background:var(--good)}
 .ok:disabled{background:var(--surface-2);color:var(--muted);border:1px solid var(--line)}
+/* « Passer à <joueur> » : vert réservé aux points, donc gris ardoise/bleu acier. */
+.act.slate{background:var(--pass);box-shadow:0 2px 0 var(--shadow)}
+.act.slate:active:not(:disabled){transform:scale(.98)}
 
 /* ---- Mode dés ---- */
 .modes{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px}
@@ -160,12 +166,19 @@ h1 span{color:var(--muted);font-weight:600}
 .dturn .damt{font:700 30px var(--num);font-variant-numeric:tabular-nums;color:var(--accent)}
 .dturn .dgain{font:700 15px var(--num);color:var(--good);font-variant-numeric:tabular-nums}
 .dboard{display:grid;grid-template-columns:repeat(6,1fr);gap:7px;margin-bottom:10px}
-.die{aspect-ratio:1;border-radius:12px;background:var(--on-strong);color:var(--fg);display:flex;align-items:center;justify-content:center;
-  font-size:44px;line-height:1;border:1.5px solid var(--line);box-shadow:0 2px 0 var(--shadow);transition:transform .1s;min-height:48px}
+.die{aspect-ratio:1;border-radius:14px;background:var(--on-strong);color:var(--fg);display:flex;align-items:center;justify-content:center;
+  border:1.5px solid var(--line);box-shadow:0 2px 0 var(--shadow);transition:transform .12s,box-shadow .12s;min-height:48px;padding:14%;
+  filter:drop-shadow(0 1px 1px rgba(0,0,0,.08))}
+.die:not(.gray):not(.dead){border-color:var(--line)}
+.die.kept{background:var(--surface);box-shadow:0 2px 0 var(--shadow);
+  border-color:var(--pip,var(--accent));
+  border-color:color-mix(in srgb,var(--pip,var(--accent)) 38%,var(--line))}
+.die.gray,.die.dead{background:var(--surface-2);color:var(--muted);opacity:.55;border-style:dashed;border-color:var(--line)}
+.die .face{display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);gap:14%;width:100%;height:100%}
+.die .pip{aspect-ratio:1;border-radius:50%;background:var(--pip,var(--accent));justify-self:center;align-self:center;width:86%}
+.die .pip.off{background:transparent}
+.die.gray .pip:not(.off),.die.dead .pip:not(.off){background:var(--muted)}
 .die.rollin{overflow:hidden}
-.die.kept{background:var(--surface);font-weight:700}
-.die.gray{background:var(--surface-2);color:var(--muted);opacity:.55}
-.die.dead{background:var(--surface-2);color:var(--muted);opacity:.5}
 .dhint{font-size:12px;color:var(--muted);margin:0 0 8px;line-height:1.35}
 .drow-lost .num b{color:var(--bad)}
 .dmsgs{margin-bottom:8px}
@@ -176,7 +189,7 @@ h1 span{color:var(--muted);font-weight:600}
 .dsub{font-size:13px;color:var(--muted);margin:0 0 8px;line-height:1.45}
 .dsub b{color:var(--fg)}
 .dgrid{display:block;margin-bottom:8px}
-.dgrid .die{padding:12px;min-width:48px}
+.dgrid .die{min-width:54px;min-height:54px}
 .dgrid small{display:block;font:700 12px var(--num);color:var(--muted);letter-spacing:.05em;text-transform:uppercase;margin-bottom:6px}
 .dgrid .dgroup{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:10px}
 .dgrid .div{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
@@ -839,7 +852,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.46';
+  const VERSION = '3.47';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -1525,18 +1538,47 @@ h1 span{color:var(--muted);font-weight:600}
   // ---- Mode dés : rendu ---------------------------------------------------
   function dGlyph(v) { return DICE_GLYPH[v] || String(v); }
 
+  // Une face de dé « réaliste » : grille 3×3 de points disposés comme un vrai dé.
+  // PIPS[v] = couples [ligne, colonne] où poser un point (0-indexé).
+  const PIPS = {
+    1: [[1, 1]],
+    2: [[0, 0], [2, 2]],
+    3: [[0, 0], [1, 1], [2, 2]],
+    4: [[0, 0], [0, 2], [2, 0], [2, 2]],
+    5: [[0, 0], [0, 2], [1, 1], [2, 0], [2, 2]],
+    6: [[0, 0], [1, 0], [2, 0], [0, 2], [1, 2], [2, 2]]
+  };
+  function dFace(v, pip) {
+    const dots = PIPS[v] || [];
+    const on = (r, c) => dots.some(([R, C]) => R === r && C === c);
+    let cells = '';
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 3; c++) {
+        const filled = (v >= 1 && v <= 6) && on(r, c);
+        cells += `<i class="pip${filled ? '' : ' off'}"></i>`;
+      }
+    }
+    return `<span class="face"${pip ? ' style="--pip:' + pip + '"' : ''}>${cells}</span>`;
+  }
+
+  // Affiche un dé : « tenu » (points colorés par jet), « gris » (à relancer /
+  // perdant) avec des points éteints.
+  function dDie(v, kept, color) {
+    return `<span class="die ${kept ? 'kept' : 'gray'}">${dFace(v, kept ? color : '')}</span>`;
+  }
+
   // Affiche les dés : « tenus » (des jets antérieurs, colorés par jet) puis le
   // « lancer courant » (gardés = couleur du jet, à relancer = gris).
   // En idle (aucun lancer), on affiche un plateau fixe de 6 dés gris pour que
   // l'interface reste stable. En état perdu : les dés sans valeur en gris.
   function diceRow(st) {
     const die = (d) => d.kept
-      ? `<span class="die kept" style="color:${jetColor(d.jet)};border-color:${jetColor(d.jet)}">${dGlyph(d.v)}</span>`
-      : `<span class="die gray">${dGlyph(d.v)}</span>`;
+      ? dDie(d.v, true, jetColor(d.jet))
+      : dDie(d.v, false, '');
     // Idle : plateau vide de 6 dés gris (fenêtre identique au lancer).
     if (!st) {
       const empty = Array.from({ length: 6 }, () => ({ v: 0, jet: 0, kept: false }));
-      const cells = empty.map(d => `<span class="die gray">·</span>`).join('');
+      const cells = empty.map(() => dDie(0, false, '')).join('');
       return `<div class="dgrid"><div class="dgroup"><small>6 dés — appuie sur Lancer pour débuter</small><div class="div">${cells}</div></div></div>`;
     }
     const perdu = st.type === 'perdu';
@@ -1672,7 +1714,7 @@ h1 span{color:var(--muted);font-weight:600}
         bottom = '';
       }
     } else if (st.type === 'perdu') {
-      bottom = `<button class="act ok" style="width:100%" data-a="dasser">Passer à ${nextName}</button>`;
+      bottom = `<button class="act slate" style="width:100%" data-a="dasser">Passer à ${nextName}</button>`;
     } else {
       const canTake = st.type === 'rolling' && st.score >= openReq;
       const stopLabel = isSteal ? 'Prendre le vol' : 'Arrêter & encaisser';
