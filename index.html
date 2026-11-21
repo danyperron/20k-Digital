@@ -883,7 +883,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.52';
+  const VERSION = '3.53';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -2123,12 +2123,22 @@ h1 span{color:var(--muted);font-weight:600}
   // les autres la rejoignent. Le serveur détient l'autorité des scores et du
   // tour ; chaque joueur exécute son propre tour localement et envoie le
   // résultat (bank/lost) au serveur qui le diffuse à tous.
-  const ONLINE_WS = (function () {
+  const ONLINE_WS_BASE = (function () {
     try { const saved = localStorage.getItem('20k-ws');
       if (saved && /^wss?:\/\//.test(saved)) return saved; } catch (e) {}
     // Serveur Cloudflare déployé (Worker + Durable Object) — défaut pour tous.
-    return 'wss://20k-dice-online.perron.workers.dev/room/m';
+    // Le code (4 chiffres) est ajouté au chemin par olWsUrl : <base>/room/<CODE>.
+    return 'wss://20k-dice-online.perron.workers.dev';
   })();
+  function olWsUrl(code) {
+    const b = ONLINE_WS_BASE.replace(/\/+$/, '');
+    return b + '/room/' + (code || 'm');
+  }
+  function olNewCode() {
+    let c;
+    do { c = String(Math.floor(1000 + Math.random() * 9000)); } while (OL.code && OL.code === c);
+    return c;
+  }
   const OL = {
     ws: null, connected: false, myIndex: -1, code: '', members: [],
     g: null, seq: 0, error: '', myTurn: false, turnProxy: null, lastSeq: 0,
@@ -2147,7 +2157,11 @@ h1 span{color:var(--muted);font-weight:600}
     try { W = window.WebSocket; } catch (e) {}
     if (!W) { OL.error = 'WebSocket non supporté sur ce navigateur.'; render(); return; }
     let conn;
-    try { conn = new W(ONLINE_WS); } catch (e) { OL.error = 'Connexion impossible.'; render(); return; }
+    try {
+      // Le code détermine la salle (chemin /room/<CODE>). L'hôte en génère un nouveau
+      // à 4 chiffres ; le rejoignant utilise celui qu'il a saisi.
+      conn = new W(olWsUrl(action === 'create' ? (OL.code = olNewCode()) : (OL.order || 'm')));
+    } catch (e) { OL.error = 'Connexion impossible.'; render(); return; }
     OL.ws = conn;
     conn.onopen = () => {
       OL.connected = true;
@@ -2155,7 +2169,7 @@ h1 span{color:var(--muted);font-weight:600}
       const color = olMyColor();
       const clientId = olClientId();
       if (action === 'create') olSend({ type: 'create', name: who, color, clientId });
-      else olSend({ type: 'join', name: who, color, code: OL.order, clientId });
+      else olSend({ type: 'join', name: who, color, clientId });
     };
     conn.onmessage = e => { try { olHandle(JSON.parse(e.data)); } catch (err) {} };
     conn.onclose = () => { OL.connected = false; OL.ws = null;
@@ -2274,7 +2288,7 @@ h1 span{color:var(--muted);font-weight:600}
         <button class="act slate" style="width:100%;margin-top:8px" data-a="ojoin">Rejoindre</button>
       </div>
       <button class="linkbtn" style="margin-top:10px" data-a="backdes">← Retour à l\'accueil</button>
-      <p class="version">Serveur : ${esc(ONLINE_WS)}</p>
+      <p class="version">Serveur : ${esc(ONLINE_WS_BASE)}</p>
     </div></div>`;
   }
   function viewOHost() {
