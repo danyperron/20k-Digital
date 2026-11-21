@@ -146,6 +146,9 @@ h1 span{color:var(--muted);font-weight:600}
 /* « Passer à <joueur> » : vert réservé aux points, donc gris ardoise/bleu acier. */
 .act.slate{background:var(--pass);box-shadow:0 2px 0 var(--shadow)}
 .act.slate:active:not(:disabled){transform:scale(.98)}
+.act.purple{background:var(--purple);box-shadow:0 2px 0 var(--shadow)}
+.act.purple:active:not(:disabled){transform:scale(.98)}
+.act.purple:disabled{background:var(--surface-2);color:var(--muted);border:1px solid var(--line)}
 
 /* ---- Mode dés ---- */
 .modes{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px}
@@ -883,7 +886,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.53';
+  const VERSION = '3.54';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -2142,7 +2145,7 @@ h1 span{color:var(--muted);font-weight:600}
   const OL = {
     ws: null, connected: false, myIndex: -1, code: '', members: [],
     g: null, seq: 0, error: '', myTurn: false, turnProxy: null, lastSeq: 0,
-    order: '', stealGain: 0, keptByRoll: [], leaving: false, profile: null
+    order: '', stealGain: 0, keptByRoll: [], leaving: false, profile: null, stealSource: -1
   };
   function olSend(o) { if (OL.ws && OL.ws.readyState === 1) OL.ws.send(JSON.stringify(o)); }
   function olLog(m) {}
@@ -2205,8 +2208,8 @@ h1 span{color:var(--muted);font-weight:600}
     switch (msg.type) {
       case 'created': OL.code = msg.code; OL.myIndex = msg.playerIndex; OL.members = msg.members || []; DS.screen = 'host'; break;
       case 'welcome': OL.code = msg.code; OL.myIndex = msg.playerIndex; OL.members = msg.members || []; DS.screen = 'ogame'; break;
-      case 'state': OL.g = msg.g; OL.seq = msg.seq; OL.members = (msg.g && msg.g.members) || OL.members; refreshMyTurn(); maybeStart(); break;
-      case 'turn': OL.g = msg.g; OL.seq = msg.seq; refreshMyTurn(); break;
+      case 'state': OL.g = msg.g; OL.seq = msg.seq; OL.members = (msg.g && msg.g.members) || OL.members; OL.keptByRoll = (msg.g && msg.g.keptByRoll) || []; refreshMyTurn(); maybeStart(); break;
+      case 'turn': OL.g = msg.g; OL.seq = msg.seq; OL.keptByRoll = (msg.g && msg.g.keptByRoll) || []; refreshMyTurn(); break;
       case 'peerState': OL.members = msg.members || OL.members; refreshMyTurn(); maybeStart(); break;
       case 'error': OL.error = msg.msg || msg.title || ''; break;
       case 'createdHost': break;
@@ -2230,12 +2233,14 @@ h1 span{color:var(--muted);font-weight:600}
       case 'oinput': OL.order = String(v == null ? '' : v).slice(0, 4); break;
       case 'oleave': olDisconnect(); DS.screen = 'setup-des'; break;
       case 'osetp': OL.profile = String(v); break;
-      case 'obank': {  // le joueur actif encaisse depuis son tour local
+      case 'obank': {  // le joueur actif encaisse depuis son tour local (normal ou vol)
         const t = OL.turnProxy;
         if (!t || !OL.myTurn) break;
+        const isSteal = OL.stealSource >= 0;
         OL.turnProxy = null;
-        olSend({ type: 'action', seq: ++OL.lastSeq, act: { type: 'bank', production: t.score || 0, gain: OL.stealGain || 0, leftoverDice: (t.toRoll || []).slice() } });
-        OL.stealGain = 0; OL.myTurn = false;
+        olSend({ type: 'action', seq: ++OL.lastSeq,
+          act: { type: 'bank', production: t.score || 0, gain: isSteal ? (OL.stealGain || 0) : 0, leftoverDice: (t.toRoll || []).slice() } });
+        OL.stealGain = 0; OL.stealSource = -1; OL.myTurn = false;
         break;
       }
       case 'olost': {  // le joueur actif perd son tour
@@ -2245,20 +2250,28 @@ h1 span{color:var(--muted);font-weight:600}
         break;
       }
       case 'oroll': {  // le joueur actif lance / relance ses dés localement
-        if (!OL.turnProxy) OL.turnProxy = T.start(T.fresh());
+        let prev;
+        if (!OL.turnProxy) { OL.turnProxy = T.start(T.fresh()); OL.keptByRoll = []; }
         else {
           const prevAllScored = !!OL.turnProxy.allScored;
           const prevKept = (OL.turnProxy.kept || []);
+          const prevJet = OL.turnProxy.lancers || 1;
           OL.turnProxy = T.roll(OL.turnProxy);
-          // On ne garde pas les dés tenus pour l'affichage en ligne (relais simple).
+          // Les dés qui rapportent du jet précédent deviennent « tenus ».
           if (prevAllScored) OL.keptByRoll = [];
+          else if (prevKept.length) OL.keptByRoll.push({ jet: prevJet, dice: prevKept });
         }
-        // Relaie le tour courant pour que les autres voient le lancer.
-        olSend({ type: 'action', seq: ++OL.lastSeq, act: { type: 'turn', turn: OL.turnProxy } });
+        // Relaie le tour courant pour que les autres voient le déroulé (dés + total).
+        olSend({ type: 'action', seq: ++OL.lastSeq, act: { type: 'turn', turn: OL.turnProxy, keptByRoll: OL.keptByRoll.slice() } });
         break;
       }
-      case 'okey': {  // garder une valeur (non implémenté en ligne v1 : tout est relancé) ; relance simple
-        if (!OL.turnProxy) break;
+      case 'ovol': {  // le joueur actif démarre un vol (relance les dés du précédent)
+        const vt = OL.g && OL.g.prevTurn;
+        if (!vt || !OL.myTurn || OL.turnProxy) break;
+        const hand = (vt.leftoverDice && vt.leftoverDice.length) ? vt.leftoverDice : undefined;
+        OL.turnProxy = T.start(T.fresh(), hand);
+        OL.keptByRoll = []; OL.stealGain = vt.gain || 0; OL.stealSource = vt.player;
+        olSend({ type: 'action', seq: ++OL.lastSeq, act: { type: 'voloff', turn: OL.turnProxy } });
         break;
       }
     }
@@ -2343,39 +2356,75 @@ h1 span{color:var(--muted);font-weight:600}
   }
   function viewOMyTurn() {
     // Le joueur actif joue son tour avec le moteur de dés local.
-    if (!OL.turnProxy) OL.turnProxy = T.start(T.fresh());
+    const myScore = (OL.g && OL.g.players && OL.g.players[OL.myIndex]) ? OL.g.players[OL.myIndex].score : 0;
+    const die = (d) => d.kept ? dDie(d.v, true, jetColor(d.jet)) : dDie(d.v, false, '');
+    const inSteal = OL.stealSource >= 0;
+
+    // Pas encore lancé (idle) : proposer de voler (si éligible) ou de lancer normalement.
+    if (!OL.turnProxy) {
+      const vt = OL.g && OL.g.prevTurn;
+      const canOffer = OL.myTurn && vt && vt.gain > 0 && vt.player !== OL.g.current
+        && myScore >= T.VOL_PASSEPORT && T.canVol(myScore, vt.gain, 0, DES_TARGET);
+      return `<div class="dgrid"><div class="dgroup"><small>Prêt à lancer</small>
+        <div class="div">${[1,2,3,4,5,6].map(v => dDie(v, false, '')).join('')}</div></div></div>
+        <div class="actions" style="grid-template-columns:${canOffer ? '1fr 1fr' : '1fr'};margin-top:8px">
+          ${canOffer ? `<button class="act purple" data-a="ovol">🔓 Voler ${fmt(vt.gain)}</button>` : ''}
+          <button class="act ok" data-a="oroll">🎲 Lancer les dés</button>
+        </div>`;
+    }
+
     const tp = OL.turnProxy;
-    const die = (d) => d.kept
-      ? dDie(d.v, true, jetColor(d.jet))
-      : dDie(d.v, false, '');
     const perdu = tp.type === 'perdu';
     const curJet = tp.lancers || 1;
     const keptCur = (tp.kept || []);
     const current = (tp.inHand || []).map(v => ({ v, jet: curJet, kept: keptCur.includes(v) }));
+    // Dés tenus des jets antérieurs (colorés par jet).
+    const keptHtml = (OL.keptByRoll || []).reduce((acc, g) =>
+      acc.concat((g.dice || []).map(v => ({ v, jet: g.jet, kept: true }))), []);
     let cells = '';
     if (perdu) {
       const lost = (tp.handLost || []).map(v => ({ v, jet: 0, kept: false }));
       cells = `<div class="dgroup"><small>Lancer perdant (aucun point)</small><div class="div">${lost.map(die).join('')}</div></div>`;
     } else {
-      cells = `<div class="dgroup"><small>Lancer n°${curJet} · celui-ci : ${fmt(tp.score || 0)}</small><div class="div">${current.map(die).join('')}</div></div>`;
+      const keptBlock = keptHtml.length
+        ? `<div class="dgroup"><small>Dés tenus (${keptHtml.length})</small><div class="div">${keptHtml.map(die).join('')}</div></div>` : '';
+      const sense = inSteal ? 'Vol · ' : '';
+      cells = `${keptBlock}
+        <div class="dgroup"><small>${sense}Lancer n°${curJet} · celui-ci : ${fmt(tp.gained || 0)}</small><div class="div">${current.map(die).join('')}</div></div>
+        ${tp.score >= 0 ? `<p class="dturn"><span class="dlab">Total du tour</span><span class="damt">${fmt(tp.score)}</span>
+          ${inSteal ? `<span class="dgain">(+ ${fmt(OL.stealGain || 0)} volés)</span>` : ''}</p>` : ''}`;
     }
-    const myScore = (OL.g && OL.g.players && OL.g.players[OL.myIndex]) ? OL.g.players[OL.myIndex].score : 0;
-    const canBank = !perdu && tp.score >= (myScore > 0 ? 1 : T.OUVRAGE);
+    const canBank = !perdu && tp.score >= (inSteal ? DES_VOL_MIN_PROD : (myScore > 0 ? 1 : T.OUVRAGE));
     return `<div class="dgrid">${cells}</div>
-      <div class="dice-wrap"><span></span><button class="reroll" data-a="oroll" ${perdu ? 'disabled' : ''}>${perdu ? 'Relancer / finir' : 'Relancer'}</button></div>
-      <div class="actions" style="grid-template-columns:1fr 1fr;margin-top:8px">
-        <button class="act ok" data-a="obank" ${canBank ? '' : 'disabled'}>Arrêter & encaisser</button>
-        ${perdu ? `<button class="act slate" data-a="olost">Passer à ${esc(OL.g.names[dNextI()])}</button>` : ''}
+      <div class="actions" style="grid-template-columns:${perdu ? '1fr 1fr' : '1fr'};margin-top:8px">
+        ${perdu
+          ? `<button class="act slate" data-a="olost">Passer à ${esc((OL.g && OL.g.names[dNextI()]) || '')}</button>`
+          : `<button class="reroll" data-a="oroll" style="width:100%">Relancer</button>`}
+      </div>
+      <div class="actions" style="grid-template-columns:1fr;margin-top:8px">
+        <button class="act ok" data-a="obank" ${canBank ? '' : 'disabled'}>${inSteal ? 'Prendre le vol' : 'Arrêter & encaisser'}</button>
       </div>`;
   }
   function dNextI() { const n = (OL.g && OL.g.names.length) || 0; return n ? (OL.g.current + 1) % n : 0; }
   function showOTurn(t) {
-    if (!t || t.type !== 'rolling') return '';
+    if (!t) return '';
+    const g = OL.g || {};
+    const who = g.names[g.current] || '';
+    const die = (d) => d.kept ? dDie(d.v, true, jetColor(d.jet)) : dDie(d.v, false, '');
+    if (t.type === 'perdu') {
+      const lost = (t.handLost || []).map(v => ({ v, jet: 0, kept: false }));
+      return `<div class="dgrid"><div class="dgroup"><small>${esc(who)} — lancer perdant (aucun point)</small><div class="div">${lost.map(die).join('')}</div></div></div>`;
+    }
+    if (t.type !== 'rolling') return '';
     const curJet = t.lancers || 1;
     const keptCur = (t.kept || []);
     const current = (t.inHand || []).map(v => ({ v, jet: curJet, kept: keptCur.includes(v) }));
-    const die = (d) => d.kept ? dDie(d.v, true, jetColor(d.jet)) : dDie(d.v, false, '');
-    return `<div class="dgrid"><div class="dgroup"><small>${esc(OL.g.names[OL.g.current] || '')} lance · ${fmt(t.score || 0)}</small><div class="div">${current.map(die).join('')}</div></div></div>`;
+    const keptHtml = (OL.keptByRoll || []).reduce((acc, gr) => acc.concat((gr.dice || []).map(v => ({ v, jet: gr.jet, kept: true }))), []);
+    const keptBlock = keptHtml.length ? `<div class="dgroup"><small>Dés tenus (${keptHtml.length})</small><div class="div">${keptHtml.map(die).join('')}</div></div>` : '';
+    return `<div class="dgrid">${keptBlock}
+      <div class="dgroup"><small>${esc(who)} · lancer n°${curJet} : ${fmt(t.gained || 0)}</small><div class="div">${current.map(die).join('')}</div></div>
+      <p class="dturn"><span class="dlab">Total du tour</span><span class="damt">${fmt(t.score || 0)}</span></p>
+    </div>`;
   }
 
   const root = document.getElementById('root');
