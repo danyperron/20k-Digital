@@ -166,16 +166,16 @@ h1 span{color:var(--muted);font-weight:600}
 .dturn .damt{font:700 30px var(--num);font-variant-numeric:tabular-nums;color:var(--accent)}
 .dturn .dgain{font:700 15px var(--num);color:var(--good);font-variant-numeric:tabular-nums}
 .dboard{display:grid;grid-template-columns:repeat(6,1fr);gap:7px;margin-bottom:10px}
-.die{aspect-ratio:1;border-radius:14px;background:var(--on-strong);color:var(--fg);display:flex;align-items:center;justify-content:center;
-  border:1.5px solid var(--line);box-shadow:0 2px 0 var(--shadow);transition:transform .12s,box-shadow .12s;min-height:48px;padding:14%;
-  filter:drop-shadow(0 1px 1px rgba(0,0,0,.08))}
+.die{position:relative;aspect-ratio:1;border-radius:11px;background:var(--on-strong);color:var(--fg);
+  border:1.5px solid var(--line);box-shadow:0 2px 0 var(--shadow);
+  transition:transform .12s,box-shadow .12s;min-width:44px;min-height:44px}
 .die:not(.gray):not(.dead){border-color:var(--line)}
-.die.kept{background:var(--surface);box-shadow:0 2px 0 var(--shadow);
+.die.kept{background:var(--surface);
   border-color:var(--pip,var(--accent));
-  border-color:color-mix(in srgb,var(--pip,var(--accent)) 38%,var(--line))}
-.die.gray,.die.dead{background:var(--surface-2);color:var(--muted);opacity:.55;border-style:dashed;border-color:var(--line)}
-.die .face{display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);gap:14%;width:100%;height:100%}
-.die .pip{aspect-ratio:1;border-radius:50%;background:var(--pip,var(--accent));justify-self:center;align-self:center;width:86%}
+  border-color:color-mix(in srgb,var(--pip,var(--accent)) 42%,var(--line))}
+.die.gray,.die.dead{background:var(--surface-2);color:var(--muted);opacity:.85;border-style:dashed;border-color:var(--line)}
+.die .face{position:absolute;inset:10%;display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);gap:9%}
+.die .pip{border-radius:50%;background:var(--pip,var(--accent));justify-self:center;align-self:center;width:96%;aspect-ratio:1}
 .die .pip.off{background:transparent}
 .die.gray .pip:not(.off),.die.dead .pip:not(.off){background:var(--muted)}
 .die.rollin{overflow:hidden}
@@ -188,12 +188,12 @@ h1 span{color:var(--muted);font-weight:600}
 .dmsg.good{background:var(--good-soft);border-color:var(--good);color:var(--good)}
 .dsub{font-size:13px;color:var(--muted);margin:0 0 8px;line-height:1.45}
 .dsub b{color:var(--fg)}
-.dgrid{display:block;margin-bottom:8px}
-.dgrid .die{min-width:54px;min-height:54px}
+.dgrid{display:block;margin-bottom:6px}
+.dgrid .die{min-width:44px;min-height:44px}
 .dgrid small{display:block;font:700 12px var(--num);color:var(--muted);letter-spacing:.05em;text-transform:uppercase;margin-bottom:6px}
 .dgrid .dgroup{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:10px}
-.dgrid .div{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
-.dgrid .div .die{flex:1 1 30%;min-width:48px;max-width:76px}
+.dgrid .div{display:flex;gap:7px;flex-wrap:wrap;justify-content:center}
+.dgrid .div .die{flex:1 1 24%;min-width:52px;max-width:60px}
 .des-log{margin-top:6px}
 .des-log summary{font-weight:600;font-size:14px;cursor:pointer;color:var(--accent);padding:4px 0}
 .dlogrow{display:grid;grid-template-columns:2em 1fr auto 4.2em;gap:8px;align-items:baseline;padding:6px 0;border-bottom:1px solid var(--line);font-size:14px}
@@ -852,7 +852,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.47';
+  const VERSION = '3.48';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -1575,10 +1575,10 @@ h1 span{color:var(--muted);font-weight:600}
     const die = (d) => d.kept
       ? dDie(d.v, true, jetColor(d.jet))
       : dDie(d.v, false, '');
-    // Idle : plateau vide de 6 dés gris (fenêtre identique au lancer).
+    // Idle : plateau fixe de 6 dés (fenêtre identique au lancer). On montre des
+    // faces 1→6 atténuées pour qu'on reconnaisse de vrais dés avant de lancer.
     if (!st) {
-      const empty = Array.from({ length: 6 }, () => ({ v: 0, jet: 0, kept: false }));
-      const cells = empty.map(() => dDie(0, false, '')).join('');
+      const cells = [1, 2, 3, 4, 5, 6].map(v => dDie(v, false, '')).join('');
       return `<div class="dgrid"><div class="dgroup"><small>6 dés — appuie sur Lancer pour débuter</small><div class="div">${cells}</div></div></div>`;
     }
     const perdu = st.type === 'perdu';
