@@ -820,7 +820,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.32';
+  const VERSION = '3.33';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -977,9 +977,11 @@ h1 span{color:var(--muted);font-weight:600}
       p: DS.current,             // joueur
       j: rollNum,                // numéro de lancer dans le tour
       dice: dice,                // les dés jetés
+      color: jetColor(rollNum),  // couleur de ce jet (pour l'affichage/export)
       gained: (st && st.gained) || 0,          // points du lancer
       cumul: (st && st.score) || (st && st.total) || 0,  // total du tour
       comb: (st && st.combinaison) || (extra && extra.comb) || '',
+      kept: (st && st.kept) || [],
       kind: kind
     });
   }
@@ -1103,9 +1105,13 @@ h1 span{color:var(--muted);font-weight:600}
       case 'deslog': {   // exporter l'historique des jets (validation)
         try {
           const blob = JSON.stringify({ app: VERSION, exportedAt: new Date().toISOString(), jets: DS.jetLog }, null, 2);
-          if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(blob); }
           const d = document.createElement('textarea'); d.value = blob; document.body.appendChild(d); d.select();
-          try { document.execCommand('copy'); } catch (e) {}
+          let copied = false;
+          try { copied = document.execCommand('copy'); } catch (e) {}
+          if (navigator.clipboard && navigator.clipboard.writeText && !copied) {
+            navigator.clipboard.writeText(blob).catch(() => {});
+            copied = true;
+          }
           document.body.removeChild(d);
           flash('good', 'Historique copié', 'Le détail des jets (version ' + VERSION + ') a été copié dans le presse-papier.');
         } catch (e) { flash('warn', 'Export', 'Impossible de copier l\'historique.'); }
@@ -1369,44 +1375,38 @@ h1 span{color:var(--muted);font-weight:600}
   // ---- Mode dés : rendu ---------------------------------------------------
   function dGlyph(v) { return DICE_GLYPH[v] || String(v); }
 
-  // Affiche les dés du lancer courant (gardés = couleur de jet, à relancer = gris).
-  // En état perdu, on montre les dés sans valeur (handLost) tous en gris.
+  // Affiche les dés : « tenus » (des jets antérieurs, colorés par jet) puis le
+  // « lancer courant » (gardés = couleur du jet, à relancer = gris).
+  // En état perdu, on montre les dés sans valeur (handLost) en gris.
   function diceRow(st) {
     if (!st) return '';
     const perdu = st.type === 'perdu';
-    // Perte : le jet ne rapporte rien, tous les dés sont gris + les dés déjà gardés.
+    const die = (d) => d.kept
+      ? `<span class="die kept" style="color:${jetColor(d.jet)};border-color:${jetColor(d.jet)}">${dGlyph(d.v)}</span>`
+      : `<span class="die gray">${dGlyph(d.v)}</span>`;
+    // Perte : les dés tenus + le jet sans point (gris).
     if (perdu) {
-      const lost = (st.handLost || []).map(v => ({ v, jet: 0, kept: false }));
       const keptByJet = (DS.keptByRoll || []).reduce(
         (acc, g) => acc.concat((g.dice || []).map(v => ({ v, jet: g.jet, kept: true }))), []);
-      const hand = keptByJet.concat(lost);
-      if (!hand.length) return '';
-      const cells = hand.map(d => d.kept
-        ? `<span class="die kept" style="color:${jetColor(d.jet)};border-color:${jetColor(d.jet)}">${dGlyph(d.v)}</span>`
-        : `<span class="die gray">${dGlyph(d.v)}</span>`).join('');
-      return `<div class="dgrid"><div class="dgroup"><small>Perdu — ce jet ne rapporte rien</small><div class="div">${cells}</div></div></div>`;
+      const lost = (st.handLost || []).map(v => ({ v, jet: 0, kept: false }));
+      let html = '';
+      if (keptByJet.length) html += `<div class="dgroup"><small>Dés tenus</small><div class="div">${keptByJet.map(die).join('')}</div></div>`;
+      if (lost.length) html += `<div class="dgroup"><small>Lancer perdant (aucun point)</small><div class="div">${lost.map(die).join('')}</div></div>`;
+      return `<div class="dgrid">${html}</div>`;
     }
     if (st.type !== 'rolling') return '';
-    // Main complète (6 dés MAX, jamais plus) : les dés tenus des jets précédents
-    // (gardés, colorés par jet), puis la main courante (gardés colorés, à relancer gris).
-    // Si un jet « main pleine » relance les 6, on n'affiche JAMAIS les dés tenus d'une
-    // main antérieure en plus : on tronque à 6 pour respecter 6 dés au total.
-    const keptByJet = (DS.keptByRoll || []).reduce(
-      (acc, g) => acc.concat((g.dice || []).map(v => ({ v, jet: g.jet, kept: true }))), []);
     const curJet = st.lancers || 1;
     const keptCur = (st.kept || []);
-    const current = (st.inHand || []).map(v => ({
-      v, jet: curJet, kept: keptCur.includes(v)
-    }));
-    const hand = keptByJet.concat(current).slice(0, 6);
-    if (!hand.length) return '';
-    const cells = hand.map(d => !d.kept
-      ? `<span class="die gray">${dGlyph(d.v)}</span>`
-      : `<span class="die kept" style="color:${jetColor(d.jet)};border-color:${jetColor(d.jet)}">${dGlyph(d.v)}</span>`
-    ).join('');
-    const keptN = hand.filter(d => d.kept).length;
-    const grayN = hand.length - keptN;
-    return `<div class="dgrid"><div class="dgroup"><small>${keptN} gardé${keptN===1?'':'s'} · ${grayN} à relancer · une couleur par jet</small><div class="div">${cells}</div></div></div>
+    const current = (st.inHand || []).map(v => ({ v, jet: curJet, kept: keptCur.includes(v) }));
+    const keptByJet = (DS.keptByRoll || []).reduce(
+      (acc, g) => acc.concat((g.dice || []).map(v => ({ v, jet: g.jet, kept: true }))), []);
+    let html = '';
+    // Dés tenus des jets précédents (affichés distinctement, jamais mélangés au lancer courant).
+    if (keptByJet.length) html += `<div class="dgroup"><small>Dés tenus (${keptByJet.length})</small><div class="div">${keptByJet.map(die).join('')}</div></div>`;
+    // Lancer courant : gardés (coloriés ce jet) + à relancer (gris).
+    html += `<div class="dgroup"><small>Lancer n°${curJet}</small><div class="div">${current.map(die).join('')}</div></div>`;
+    if (!current.length && !keptByJet.length) return '';
+    return `<div class="dgrid">${html}</div>
       ${dHint(st) ? `<p class="dhint">${dHint(st)}</p>` : ''}`;
   }
 
@@ -1552,14 +1552,15 @@ h1 span{color:var(--muted);font-weight:600}
         </div></div>` : ''}
       <main class="list">${DS.players.map(viewRowDes).join('')}</main>
       ${w === null ? dPanel() : ''}
-      ${DS.jetLog.length ? `<details class="des-log" open><summary>Jets (${DS.jetLog.length}) · export ci-dessous</summary>
-        <p class="dloghead">Partie #${DS.gameId} · version ${esc(VERSION)} · dans l'ordre des lancers</p>
-        ${DS.jetLog.map(e => {
+      ${DS.jetLog.length ? `<details class="des-log" open><summary>Jets (${DS.jetLog.length}) · derniers en haut</summary>
+        <p class="dloghead">Partie #${DS.gameId} · version ${esc(VERSION)} · du plus récent au plus ancien</p>
+        ${DS.jetLog.slice().reverse().map(e => {
           const nm = esc(DS.names[e.p] || `Joueur ${e.p + 1}`);
           const kindLabel = e.kind === 'bank' ? 'ENC.' : e.kind === 'vol-bank' ? 'VOL ENC.' : e.kind === 'perdu' ? 'PERDU' : 'jet';
           const comb = e.comb ? ` · ${esc(e.comb)}` : '';
           const cls = e.kind === 'perdu' ? ' none' : (e.kind === 'bank' || e.kind === 'vol-bank') ? ' vol' : ' lv';
-          const dice = (e.dice || []).map(d => dGlyph(d)).join(' ');
+          const c = e.color || '#999';
+          const dice = (e.dice || []).map(d => `<span style="color:${c}">${dGlyph(d)}</span>`).join(' ');
           return `<div class="djetrow"><span class="ln">T${e.n || 0}.${e.j > 0 ? e.j : ''}</span>
             <span class="lnm">${nm}</span>
             <span class="ddice-mini">${dice || '·'}</span>
