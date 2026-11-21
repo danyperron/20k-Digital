@@ -146,6 +146,9 @@ h1 span{color:var(--muted);font-weight:600}
 .mode{height:46px;border-radius:12px;border:1px solid var(--line);background:var(--surface-2);color:var(--fg);font-weight:700;font-size:15px}
 .mode[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--on-strong)}
 .dice-wrap{display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between;align-items:flex-end;margin-bottom:10px}
+.reroll{height:46px;padding:0 16px;border-radius:12px;border:0;background:var(--good);color:var(--on-strong);font-weight:700;font-size:16px;flex:none;box-shadow:0 2px 0 var(--shadow);transition:transform .08s}
+.reroll:active:not(:disabled){transform:scale(.95)}
+.reroll:disabled{background:var(--surface-2);color:var(--muted);border:1px solid var(--line)}
 .dstate{font-size:13px;color:var(--muted);line-height:1.4}
 .dstate b{color:var(--fg)}
 .dturn{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
@@ -820,7 +823,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.33';
+  const VERSION = '3.34';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -1377,14 +1380,19 @@ h1 span{color:var(--muted);font-weight:600}
 
   // Affiche les dés : « tenus » (des jets antérieurs, colorés par jet) puis le
   // « lancer courant » (gardés = couleur du jet, à relancer = gris).
-  // En état perdu, on montre les dés sans valeur (handLost) en gris.
+  // En idle (aucun lancer), on affiche un plateau fixe de 6 dés gris pour que
+  // l'interface reste stable. En état perdu : les dés sans valeur en gris.
   function diceRow(st) {
-    if (!st) return '';
-    const perdu = st.type === 'perdu';
     const die = (d) => d.kept
       ? `<span class="die kept" style="color:${jetColor(d.jet)};border-color:${jetColor(d.jet)}">${dGlyph(d.v)}</span>`
       : `<span class="die gray">${dGlyph(d.v)}</span>`;
-    // Perte : les dés tenus + le jet sans point (gris).
+    // Idle : plateau vide de 6 dés gris (fenêtre identique au lancer).
+    if (!st) {
+      const empty = Array.from({ length: 6 }, () => ({ v: 0, jet: 0, kept: false }));
+      const cells = empty.map(d => `<span class="die gray">·</span>`).join('');
+      return `<div class="dgrid"><div class="dgroup"><small>6 dés — appuie sur Lancer pour débuter</small><div class="div">${cells}</div></div></div>`;
+    }
+    const perdu = st.type === 'perdu';
     if (perdu) {
       const keptByJet = (DS.keptByRoll || []).reduce(
         (acc, g) => acc.concat((g.dice || []).map(v => ({ v, jet: g.jet, kept: true }))), []);
@@ -1401,9 +1409,7 @@ h1 span{color:var(--muted);font-weight:600}
     const keptByJet = (DS.keptByRoll || []).reduce(
       (acc, g) => acc.concat((g.dice || []).map(v => ({ v, jet: g.jet, kept: true }))), []);
     let html = '';
-    // Dés tenus des jets précédents (affichés distinctement, jamais mélangés au lancer courant).
     if (keptByJet.length) html += `<div class="dgroup"><small>Dés tenus (${keptByJet.length})</small><div class="div">${keptByJet.map(die).join('')}</div></div>`;
-    // Lancer courant : gardés (coloriés ce jet) + à relancer (gris).
     html += `<div class="dgroup"><small>Lancer n°${curJet}</small><div class="div">${current.map(die).join('')}</div></div>`;
     if (!current.length && !keptByJet.length) return '';
     return `<div class="dgrid">${html}</div>
@@ -1437,98 +1443,91 @@ h1 span{color:var(--muted);font-weight:600}
     </section>`;
   }
 
-  // Panneau du bas (plateau de dés) selon l'état de la partie.
+  // Panneau du bas (plateau de dés) — interface fixe : même structure dans tous
+  // les états (idle, lancer, vol, perdu). Le bouton principal du haut lance ou
+  // relance les dés ; le bouton du bas encaisse ; sur une perte on passe au suivant.
   function dPanel() {
-    const st = DS.turn;               // TourDice state ou null (idle)
+    const st = DS.turn;               // TurnDice state ou null (idle)
     const p = DS.players[DS.current];
     const playerName = esc(DS.names[DS.current]);
     const currentPhase = DS.phase;
-
-    // --- État idle : pas encore de lancer ---
-    if (!st) {
-      const offer = dVolOffer();
-      const reason = dStealReason();
-      const actions = offer
-        ? `<div class="actions">
-            <button class="act pass" data-a="volerd">Voler ${fmt(DS.prevTurn.gain)}</button>
-            <button class="act ok" data-a="lancier">Lancer</button>
-          </div>
-          <p class="dsub">${ICON.lock}<b>Vol possible :</b> partir des dés restants de ${esc(DS.names[DS.prevTurn.player])} (gain ${fmt(DS.prevTurn.gain)} à copier). Ou lancer normalement.</p>`
-        : DS.prevTurn && reason
-          ? `<div class="actions"><button class="act ok" data-a="lancier">Lancer les 6 dés</button></div>
-             <p class="dsub">${ICON.lock}<b>Vol indisponible :</b> ${reason}</p>`
-          : `<div class="actions"><button class="act ok" data-a="lancier">Lancer les 6 dés</button></div>
-             <p class="dsub">Joueur actuel : <b>${playerName}</b> — lance les 6 dés pour débuter le tour.</p>`;
-      return `<footer class="panel" id="panel">
-        ${msg ? `<div class="msg ${msg.kind}" role="alert">${ICON.info}<div><strong>${esc(msg.title)}</strong>${esc(msg.text)}</div></div>` : ''}
-        <div class="turnline">
-          <div>
-            <div class="label">Au tour de · <b>${playerName}</b></div>
-            <div class="dvn"><b>${fmt(p.score)}</b><span>pts · reste ${fmt(DES_TARGET - p.score)}</span></div>
-          </div>
-        </div>
-        ${actions}
-      </footer>`;
-    }
-
-    // --- État rolling / banked / perdu ---
+    const isIdle = !st;
     const isSteal = currentPhase === 'steal';
-    const turnTotal = isSteal ? DS.steal.gainToSteal + st.score : st.score;
+    const nextName = DS.names.length ? esc(DS.names[dNext(DS.current)]) : '';
 
-    // Encaisser est-il permis ?
-    const canTake = st.type === 'rolling' && (
-      isSteal ? (st.score >= DES_VOL_MIN_PROD) : st.canStop
-    );
-    const openReq = isSteal ? DES_VOL_MIN_PROD : T.OUVRAGE;
-
-    const statusInfo = st.type === 'perdu'
-      ? { cls: 'bad', txt: 'Jet sans point — tour perdu, ' + playerName + ' n\'ajoute rien.' }
-      : st.type === 'rolling'
-        ? { cls: 'good', txt: isSteal ? 'Phase de vol' : 'Lancer en cours' }
-        : { cls: 'good', txt: 'Encaissé' };
-
-    const stateTxt = st.type === 'perdu'
-      ? `<div class="dstate"><b>${playerName}</b> a perdu ce tour (aucun point).</div>`
-      : st.type === 'rolling'
-        ? `<div class="dstate">${isSteal
-            ? `<b>Vol</b> — dés restants de ${esc(DS.names[DS.steal.sourcePlayer])} · gain ${fmt(DS.steal.gainToSteal)}. Production minimale : ${fmt(openReq)}.`
-            : `<b>Lancer n°${st.lancers}</b> · il faut ${fmt(openReq)} pour pouvoir encaisser.`}</div>`
-        : `<div class="dstate"><b>${playerName}</b> encaisse ${fmt(st.total)}.</div>`;
-
-    // Boutons du bas : on s'arrête (encaisser) ou on relance — on ne « perd »
-    // jamais manuellement, la perte vient d'un lancer sans point (zone moteur).
-    const rollDisabled = st.type !== 'rolling';
-    const stopLabel = isSteal ? 'Prendre le vol' : 'Arrêter & encaisser';
-    const buttons = st.type === 'perdu'
-      ? `<button class="act ok" style="width:100%" data-a="dasser">Au tour suivant</button>`
-      : `<button class="clear" style="width:100%" data-a="rolldes" ${rollDisabled ? 'disabled' : ''}>Relancer les dés</button>
-         <div class="actions"><button class="act ok" data-a="stopdes" ${canTake ? '' : 'disabled'}>${stopLabel}</button></div>`;
-    const canTakeHint = (st.type === 'rolling' && !canTake)
-      ? `<p class="dhint">Il faut ${fmt(openReq)} points pour pouvoir encaisser ce tour. Relance ou garde d'abord.</p>`
+    // En-tête commun + bouton principal (haut à droite, coloré).
+    let topBtn, topLabel, topAction;
+    if (isIdle) {
+      topLabel = '🎲 Lancer les dés';
+      topAction = 'lancier';
+    } else if (st.type === 'perdu') {
+      topLabel = '';
+      topAction = '';
+    } else {
+      topLabel = '🎲 Relancer les dés';
+      topAction = 'rolldes';
+    }
+    topBtn = topAction
+      ? `<button class="reroll" data-a="${topAction}" ${st && st.type !== 'rolling' ? 'disabled' : ''}>${topLabel}</button>`
       : '';
-    // Main pleine : tous les dés du dernier lancer ont rapporté, la relance
-    // suivante rejoue les 6 dés (le total peut grimper fort, ex. suite = 1500).
-    const allScoredBanner = (st.type === 'rolling' && st.allScored)
-      ? `<div class="dmsg good">🎲 Tous les dés ont rapporté : relance les 6 dés pour continuer (le total du tour augmentera).</div>`
+
+    // Total + état du tour.
+    const totalShown = isIdle ? 0 : (st.type === 'perdu' ? 0 : (st.score || 0));
+    const label1 = isIdle ? 'Au tour de' : 'Tour de';
+    const stateTxt = isIdle
+      ? `<div class="dstate">Joueur prêt à lancer.</div>`
+      : (st.type === 'perdu' ? `<div class="dstate"><b>${playerName}</b> a perdu ce tour (aucun point).</div>`
+        : st.type === 'rolling' ? `<div class="dstate">${isSteal
+            ? `<b>Vol</b> — dés restants de ${esc(DS.names[DS.steal.sourcePlayer])} · gain ${fmt(DS.steal.gainToSteal)}. Production minimale : ${fmt(isSteal ? DES_VOL_MIN_PROD : T.OUVRAGE)}.`
+            : `<b>Lancer n°${st.lancers}</b> · il faut ${fmt(T.OUVRAGE)} pour pouvoir encaisser.`}</div>`
+        : `<div class="dstate"><b>${playerName}</b> encaisse ${fmt(st.total)}.</div>`);
+
+    // Bandeau « main pleine ».
+    const allScoredBanner = (st && st.type === 'rolling' && st.allScored)
+      ? `<div class="dmsg good">🎲 Tous les dés ont rapporté : relance les 6 dés (le total du tour augmentera).</div>` : (isIdle && dVolOffer())
+      ? `<div class="dmsg good">🔓 Vol possible : partir des dés restants de <b>${esc(DS.names[DS.prevTurn.player])}</b> (gain ${fmt(DS.prevTurn.gain)} à copier).</div>`
       : '';
+
+    // Bouton(s) du bas.
+    let bottom;
+    if (isIdle) {
+      const offer = dVolOffer();
+      if (offer) {
+        bottom = `<div class="actions">
+          <button class="act pass" data-a="volerd">Voler ${fmt(DS.prevTurn.gain)}</button>
+          <button class="act ok" data-a="lancier">Lancer</button>
+        </div>`;
+      } else {
+        bottom = `<div class="actions"><button class="act ok" data-a="lancier">Lancer les 6 dés</button></div>`;
+      }
+    } else if (st.type === 'perdu') {
+      bottom = `<button class="act ok" style="width:100%" data-a="dasser">Passer à ${nextName}</button>`;
+    } else {
+      const canTake = st.type === 'rolling' && (isSteal ? (st.score >= DES_VOL_MIN_PROD) : st.canStop);
+      const stopLabel = isSteal ? 'Prendre le vol' : 'Arrêter & encaisser';
+      const canTakeHint = (st.type === 'rolling' && !canTake)
+        ? `<p class="dhint">Il faut ${fmt(isSteal ? DES_VOL_MIN_PROD : T.OUVRAGE)} points pour pouvoir encaisser ce tour.</p>` : '';
+      bottom = `${canTakeHint}
+        <div class="actions"><button class="act ok" data-a="stopdes" ${canTake ? '' : 'disabled'}>${stopLabel}</button></div>`;
+    }
 
     return `<footer class="panel" id="panel">
       ${msg ? `<div class="msg ${msg.kind}" role="alert">${ICON.info}<div><strong>${esc(msg.title)}</strong>${esc(msg.text)}</div></div>` : ''}
       <div class="dice-wrap">
         <div>
-          <div class="label">Tour de <b>${playerName}</b> · <span class="dstate">${statusInfo.txt}</span></div>
+          <div class="label">${label1} <b>${playerName}</b></div>
           <div class="dturn">
-            <span class="dlab">Tour</span><span class="damt">${fmt(st.type === 'perdu' ? 0 : (st.score || 0))}</span>
-            ${isSteal ? `<span class="dgain">+ vol ${fmt(DS.steal.gainToSteal)} = ${fmt(turnTotal)}</span>` : ''}
-            ${st.type === 'rolling' && st.gained ? `<span class="dgain">(+${fmt(st.gained)} ce lancer)</span>` : ''}
+            <span class="dlab">Tour</span><span class="damt">${fmt(totalShown)}</span>
+            ${st && st.type === 'rolling' && st.gained ? `<span class="dgain">(+${fmt(st.gained)} ce lancer)</span>` : ''}
           </div>
           ${stateTxt}
         </div>
+        ${topBtn}
       </div>
       ${allScoredBanner}
       ${diceRow(st)}
-      ${canTakeHint}
-      ${buttons}
+      ${(isIdle && !dVolOffer()) ? `<p class="dsub">Tu as ${fmt(DES_TARGET - p.score)} points · objectif ${fmt(DES_TARGET)}.</p>` : ''}
+      ${bottom}
     </footer>`;
   }
 
