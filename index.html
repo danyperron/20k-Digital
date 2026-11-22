@@ -886,7 +886,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.66';
+  const VERSION = '3.67';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -2590,6 +2590,7 @@ function olAskStats() {
         break;
       }
     }
+    render();   // réaffiche immédiatement après toute action en ligne (le serveur confirmera ensuite)
   }
   function viewOStats() {
     const bl = OL.stats && OL.stats.byName;
@@ -2656,8 +2657,9 @@ function olAskStats() {
     const on = OL.members.filter(m => m.online !== false);
     return `<div class="app"><div class="setup">
       <h1>20K <span>en ligne</span></h1>
-      <div class="rcode"><small>Code de la partie</small><b>${esc(OL.code)}</b></div>
-      <p class="dsub">Partagez ce code à 4 chiffres : les autres se connectent et rejoignent cette partie.</p>
+      <div class="rcode"><small>Code de la partie — partage-le pour que les autres rejoignent</small>
+        <b style="font-size:4.5rem;letter-spacing:.25em;display:block;margin:.2em 0">${esc(OL.code)}</b>
+        <small>Les autres : En ligne → entre le code → Rejoindre</small></div>
       <div><h2>Joueurs dans la partie (${on.length})</h2>
         <div class="plist">${OL.members.map((m, i) => orientii(m)).join('') || '<p class="dsub">En attente de joueurs…</p>'}</div>
       </div>
@@ -2697,6 +2699,21 @@ function olAskStats() {
           : `<div class="dmsg">🎲 Au tour de <b>${esc(g.names[g.current] || '?')}</b>…</div>`);
     const turnArea = OL.myTurn ? viewOMyTurn() : (g.turn && g.turn.type === 'rolling' ? showOTurn(g.turn) : '');
     const jlog = (g.log || []).slice().reverse();
+    // Bannière « tirage au sort » : affiche l'ordre de jeu décidé au démarrage, tant que la
+    // partie n'a pas de points (début). On montre dès le joueur courant.
+    let orderBanner = '';
+    const fresh = !g.players.some(p => p.score > 0);
+    if (fresh && g.order && Array.isArray(g.order)) {
+      const n = g.order.length;
+      const startSeat = (typeof g.current === 'number') ? g.current : 0;
+      const seq = [];
+      for (let k = 0; k < n; k++) {
+        const seat = (startSeat + k) % n;
+        const nm = g.names[seat] || '?';
+        seq.push((k === 0 ? '🎲 ' : '') + esc(nm) + (k === 0 ? ' (démarre)' : ''));
+      }
+      orderBanner = `<div class="dmsg" style="margin-bottom:6px"><b>Tirage au sort</b> — ordre de jeu : ${seq.join(' → ')}</div>`;
+    }
     const journal = jlog.length ? `<details class="des-log" open><summary>Journal des tours (${jlog.length})</summary>
       ${jlog.map((e, i1) => {
         const nm = esc(g.names[e.i] || '?');
@@ -2715,6 +2732,7 @@ function olAskStats() {
       <div class="top"><button class="tool" data-a="oleave">← Quitter</button>
         <span class="rcode small"><b>#${esc(OL.code)}</b></span></div>
       <h1>20K <span>en ligne</span></h1>
+      ${orderBanner}
       ${banner}
       <div class="rows">${rows}</div>
       ${turnArea}
@@ -2724,6 +2742,7 @@ function olAskStats() {
   }
   function viewOMyTurn() {
     // Le joueur actif joue son tour avec le moteur de dés local.
+    olReseat();   // s'assurer que myIndex correspond bien à notre siège avant d'afficher
     const myScore = (OL.g && OL.g.players && OL.g.players[OL.myIndex]) ? OL.g.players[OL.myIndex].score : 0;
     const die = (d) => d.kept ? dDie(d.v, true, jetColor(d.jet)) : dDie(d.v, false, '');
     const inSteal = OL.stealSource >= 0;
@@ -2781,6 +2800,8 @@ function olAskStats() {
     const diceBadge = !perdu
       ? `<span class="diceleft" style="color:${dieValueColor(diceLeft)};border-color:${dieValueColor(diceLeft)};background:${dieValueColor(diceLeft)}1f" title="Nombre de dés qu'on va relancer">${diceLeft} dés</span>` : '';
     const tropMsg = trop ? `<div class="dmsg warn">⚖️ C'est trop : ${fmt(tp.score)} dépasse le restant (${fmt(restant)}). Tu ne peux pas encaisser — passe ton tour (dés perdus).</div>` : '';
+    const passerLab = trop ? `C'est trop — passer à ${esc((OL.g && OL.g.names[dNextI()]) || '')}`
+      : `Passer à ${esc((OL.g && OL.g.names[dNextI()]) || '')}`;
     const volMsg = inSteal && OL.g && OL.g.prevTurn
       ? `<div class="dmsg"><b>Vol en cours</b> : dés restants de <b>${esc((OL.g.names[OL.stealSource]) || '?')}</b> — ${fmt(OL.stealGain || 0)} pts volés à copier. Encaisser ajoutera ton score + le vol.</div>` : '';
     return `<div class="dgrid">${cells}</div>
@@ -2789,7 +2810,7 @@ function olAskStats() {
       ${volMsg}
       <div class="actions" style="grid-template-columns:${(perdu || trop) ? '1fr' : '1fr'};margin-top:8px">
         ${(perdu || trop)
-          ? `<button class="act slate" data-a="olost">C'est trop — passer à ${esc((OL.g && OL.g.names[dNextI()]) || '')}</button>`
+          ? `<button class="act slate" data-a="olost">${passerLab}</button>`
           : ''}
       </div>
       <div class="actions" style="grid-template-columns:1fr;margin-top:8px">
