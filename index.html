@@ -886,7 +886,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.63';
+  const VERSION = '3.64';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -2533,14 +2533,18 @@ function olAskStats() {
         if (!t || !OL.myTurn) break;
         const isSteal = OL.stealSource >= 0;
         OL.turnProxy = null;
+        const totalDice = (t.kept || []).length + (t.toRoll || []).length;
         olSend({ type: 'action', seq: ++OL.lastSeq,
-          act: { type: 'bank', production: t.score || 0, gain: isSteal ? (OL.stealGain || 0) : 0, leftoverDice: (t.toRoll || []).slice() } });
+          act: { type: 'bank', production: t.score || 0, gain: isSteal ? (OL.stealGain || 0) : 0,
+            leftoverDice: (t.toRoll || []).slice(), diceUsed: totalDice } });
         OL.stealGain = 0; OL.stealSource = -1; OL.myTurn = false;
         break;
       }
       case 'olost': {  // le joueur actif perd son tour
+        const tl = OL.turnProxy;
         OL.turnProxy = null;
-        olSend({ type: 'action', seq: ++OL.lastSeq, act: { type: 'lost' } });
+        olSend({ type: 'action', seq: ++OL.lastSeq,
+          act: { type: 'lost', diceUsed: tl ? ((tl.kept || []).length + (tl.toRoll || []).length) : 0 } });
         OL.myTurn = false;
         break;
       }
@@ -2621,7 +2625,7 @@ function olAskStats() {
       <div><h2>Créer une partie</h2>
         ${!olHaveProfile() ? '<p class="dsub" style="color:#c0392b">Choisissez d\'abord votre joueur ci-dessus.</p>' : ''}
         <button class="act ok" style="width:100%" data-a="ocreate">Créer une partie</button></div>
-      <div><h2>Rejoindre une partie</h2>
+      <div><h2>Entrer le code pour rejoindre une partie</h2>
         <input type="text" id="o-code" autocomplete="off" inputmode="numeric" maxlength="4"
           placeholder="Code à 4 chiffres" value="${esc(OL.order || '')}" style="text-align:center;letter-spacing:.2em;font:700 22px var(--num)">
         ${olSavedRoom() ? `<button class="act ok" style="width:100%;margin-top:8px" data-a="orejoin">↺ Reprendre la partie #${esc(olSavedRoom())}</button>` : ''}
@@ -2680,10 +2684,15 @@ function olAskStats() {
     const journal = jlog.length ? `<details class="des-log" open><summary>Journal des tours (${jlog.length})</summary>
       ${jlog.map((e, i1) => {
         const nm = esc(g.names[e.i] || '?');
-        const lab = e.kind === 'vol-bank' ? 'VOL +' : e.kind === 'perdu' ? 'perdu' : 'ENC. +';
-        const cls = e.kind === 'perdu' ? ' none' : (e.kind === 'vol-bank' ? ' vol' : ' lv');
+        // Libellés du journal : +points (vert) ; perdu = 0 gris ; vol tenté / raté / réussi.
+        let lab = '', cls = '', extra = '';
+        if (e.kind === 'vol-attempt') { lab = 'Vol ' + (e.diceN ? '(' + e.diceN + ' dés) ' : '') + '?'; cls = ' vol'; }
+        else if (e.kind === 'vol-fail') { lab = 'Vol raté' + (e.diceN ? ' (' + e.diceN + ' dés)' : ''); cls = ' none'; }
+        else if (e.kind === 'vol-bank') { lab = '+'+fmt(e.amount||0)+' volé' + (e.diceN ? ' · '+e.diceN+' dés' : ''); cls = ' vol'; }
+        else if (e.kind === 'perdu') { lab = '0'; cls = ' none'; }
+        else { lab = '+'+fmt(e.amount||0) + (e.diceN ? ' · '+e.diceN+' dés' : ''); cls = ' lv'; }
         return `<div class="dlogrow"><span class="ln">T${jlog.length - i1}</span><span class="lnm">${nm}</span>
-          <span class="lv${cls}">${lab} ${fmt(e.amount || 0)}</span><span class="ls">= ${fmt(e.total || 0)}</span></div>`;
+          <span class="lv${cls}">${lab}</span><span class="ls">= ${fmt(e.total || 0)}</span></div>`;
       }).join('')}</details>` : '';
     return `<div class="app"><div class="ogame">
       <div class="top"><button class="tool" data-a="oleave">← Quitter</button>
@@ -2751,7 +2760,7 @@ function olAskStats() {
     const diceBadge = !perdu
       ? `<span class="diceleft" style="color:${dieValueColor(diceLeft)};border-color:${dieValueColor(diceLeft)};background:${dieValueColor(diceLeft)}1f" title="Nombre de dés qu'on va relancer">${diceLeft} dés</span>` : '';
     const volMsg = inSteal && OL.g && OL.g.prevTurn
-      ? `<div class="dmsg warn">🔓 Vol : tu repars des dés restants de <b>${esc((OL.g.names[OL.stealSource]) || '?')}</b> — gain ${fmt(OL.stealGain || 0)} à copier, produis au moins ${fmt(DES_VOL_MIN_PROD)}.</div>` : '';
+      ? `<div class="dmsg"><b>Vol en cours</b> : dés restants de <b>${esc((OL.g.names[OL.stealSource]) || '?')}</b> — ${fmt(OL.stealGain || 0)} pts volés à copier. Encaisser ajoutera ton score + le vol.</div>` : '';
     return `<div class="dgrid">${cells}</div>
       <div class="dice-wrap"><span></span>${diceBadge}<button class="reroll" data-a="oroll" style="flex:1" ${perdu ? 'disabled' : ''}>${perdu ? 'Relancer / finir' : 'Relancer'}</button></div>
       ${volMsg}
@@ -2761,7 +2770,7 @@ function olAskStats() {
           : ''}
       </div>
       <div class="actions" style="grid-template-columns:1fr;margin-top:8px">
-        <button class="act ok" data-a="obank" ${canBank ? '' : 'disabled'}>${inSteal ? 'Prendre le vol' : 'Arrêter & encaisser'}</button>
+        <button class="act ok" data-a="obank" ${canBank ? '' : 'disabled'}>${inSteal ? 'Encaisser le vol' : 'Arrêter & encaisser'}</button>
       </div>`;
   }
   function dNextI() { const n = (OL.g && OL.g.names.length) || 0; return n ? (OL.g.current + 1) % n : 0; }
