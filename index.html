@@ -886,7 +886,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.62';
+  const VERSION = '3.63';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -1443,6 +1443,7 @@ h1 span{color:var(--muted);font-weight:600}
       case 'ocreate': oDo('ocreate'); break;
       case 'ojoin': oDo('ojoin'); break;
       case 'orejoin': oDo('orejoin'); break;
+      case 'ostart': oDo('ostart'); break;
       case 'oleave': oDo('oleave'); break;
       case 'obank': oDo('obank'); break;
       case 'olost': oDo('olost'); break;
@@ -2181,7 +2182,7 @@ h1 span{color:var(--muted);font-weight:600}
   }
   const OL = {
     ws: null, connected: false, myIndex: -1, code: '', members: [],
-    g: null, seq: 0, error: '', myTurn: false, turnProxy: null, lastSeq: 0,
+    g: null, seq: 0, error: '', myTurn: false, turnProxy: null, lastSeq: 0, keepError: false,
     order: '', stealGain: 0, keptByRoll: [], leaving: false, profile: null, stealSource: -1,
     stats: { byName: {}, byId: {}, games: [] }
   };
@@ -2250,12 +2251,13 @@ h1 span{color:var(--muted);font-weight:600}
     };
     conn.onmessage = e => { try { olHandle(JSON.parse(e.data)); } catch (err) {} };
     conn.onclose = () => { OL.connected = false; OL.ws = null;
-      if (!OL.leaving) {
+      if (!OL.leaving && !OL.keepError) {
         const saved = olSavedRoom();
         OL.error = saved
           ? 'Connexion interrompue. La partie se reprend avec le code ' + saved + ' (bouton « Reprendre » ci-dessous).'
           : 'Connexion au serveur en ligne interrompue.';
       }
+      OL.keepError = false;
       OL.leaving = false;
       olStopRosterPoll();
       render(); };
@@ -2431,17 +2433,19 @@ h1 span{color:var(--muted);font-weight:600}
     OL.ws = conn;
     conn.onopen = () => { OL.connected = true; olRosterSync(); olStartRosterPoll(); olAskStats(); };
     conn.onmessage = e => { try { olHandle(JSON.parse(e.data)); } catch (err) {} };
-    conn.onclose = () => { if (!OL.leaving) OL.error = 'Serveur injoignable.'; OL.connected = false; OL.ws = null; OL.leaving = false; olStopRosterPoll(); render(); };
+    conn.onclose = () => { if (!OL.leaving && !OL.keepError) OL.error = 'Serveur injoignable.'; OL.keepError = false; OL.connected = false; OL.ws = null; OL.leaving = false; olStopRosterPoll(); render(); };
     conn.onerror = () => { OL.error = 'Connexion au serveur impossible.'; };
   }
   function olHandle(msg) {
     switch (msg.type) {
-      case 'created': OL.code = msg.code; OL.myIndex = msg.playerIndex; OL.members = msg.members || []; DS.screen = 'host'; olRememberRoom(msg.code); olAskStats(); break;
-      case 'welcome': OL.code = msg.code; OL.myIndex = msg.playerIndex; OL.members = msg.members || []; DS.screen = 'ogame'; olRememberRoom(msg.code); olAskStats(); break;
+      case 'created': OL.code = msg.code; OL.myIndex = msg.playerIndex; OL.members = msg.members || []; DS.screen = 'host';
+        olRememberRoom(msg.code); olCheckDuplicate(); olAskStats(); break;
+      case 'welcome': OL.code = msg.code; OL.myIndex = msg.playerIndex; OL.members = msg.members || []; DS.screen = 'host';
+        olRememberRoom(msg.code); olCheckDuplicate(); olAskStats(); break;
       case 'stats': OL.stats = { byName: msg.byName || {}, byId: msg.byId || {}, games: msg.games || [] }; break;
       case 'roster': olApplyServerRoster(msg.players || []); olAskStats(); break;
       case 'state': OL.g = msg.g; OL.seq = msg.seq; OL.members = (msg.g && msg.g.members) || OL.members; OL.keptByRoll = (msg.g && msg.g.keptByRoll) || []; refreshMyTurn(); maybeStart(); break;
-      case 'turn': OL.g = msg.g; OL.seq = msg.seq; OL.keptByRoll = (msg.g && msg.g.keptByRoll) || []; refreshMyTurn(); break;
+      case 'turn': OL.g = msg.g; OL.seq = msg.seq; OL.keptByRoll = (msg.g && msg.g.keptByRoll) || []; refreshMyTurn(); maybeStart(); break;
       case 'peerState': OL.members = msg.members || OL.members; refreshMyTurn(); maybeStart(); break;
       case 'error': OL.error = msg.msg || msg.title || ''; break;
       case 'createdHost': break;
@@ -2478,8 +2482,31 @@ function olAskStats() {
     OL.myTurn = (OL.myIndex === OL.g.current) && OL.g.winner === null;
   }
   function onlineCount() { return OL.members.filter(m => m.online !== false).length; }
+  // Empêche de choisir un joueur DÉJÀ présent dans la partie (évite 2 fois la même personne).
+  // L'identité « Mon joueur » sélectionnée (~pon tant pid que nom) ne doit pas déjà être membre.
+  function olCheckDuplicate() {
+    const prof = OL.profile;
+    if (!prof) return;
+    const p = findPlayer(prof.id);
+    const myName = p ? p.name : (prof.name || '');
+    const dup = (OL.members || []).some(m => m.index !== OL.myIndex && (
+      (typeof m.pid === 'number' && m.pid != null && prof.id != null && String(m.pid) === String(prof.id))
+      || (m.name && myName && m.name.toLowerCase() === myName.toLowerCase())
+    ));
+    if (dup) {
+      OL.error = 'Ce joueur est déjà dans la partie. Choisissez un autre joueur ou quittez.';
+      OL.keepError = true;   // ne pas laisser le onclose écraser ce message
+      olDisconnect();
+      DS.screen = 'ojoin';   // revenir au choix du joueur pour que le message s'affiche
+      render();
+    }
+  }
+  // Le passage du Lobby à la partie ne se fait que quand le SERVEUR a 'started' :
+  // on attend dans le lobby que l'hôte appuie sur « Débuter » (plus de 2 joueurs possibles).
   function maybeStart() {
-    if (DS.screen === 'host' && onlineCount() >= 2) DS.screen = 'ogame';
+    if (OL.g && OL.g.started) { DS.screen = 'ogame'; return; }
+    // en pré-lancement on reste sur le lobby (host) tant que non démarré
+    if (DS.screen === 'ogame' && OL.g && !OL.g.started && !OL.g.players.some(p => p.score > 0)) DS.screen = 'host';
   }
   // ---- Actions en ligne ----
   function oDo(action, v) {
@@ -2494,6 +2521,11 @@ function olAskStats() {
         break; }
       case 'oinput': OL.order = String(v == null ? '' : v).slice(0, 4); break;
       case 'oleave': olDisconnect(); DS.screen = 'setup-des'; break;
+      case 'ostart': {  // l'hôte démarre la partie depuis le lobby
+        if (OL.myIndex !== 0) break;
+        OL.error = '';
+        olSend({ type: 'action', seq: ++OL.lastSeq, act: { type: 'start' } });
+        break; }
       case 'ostats': DS.screen = 'ostats'; OL.error = ''; olEnsureConn(); break;
       case 'osetp': { const p = findPlayer(String(v)); olSetProfile(p); render(); break; }
       case 'obank': {  // le joueur actif encaisse depuis son tour local (normal ou vol)
@@ -2609,7 +2641,11 @@ function olAskStats() {
       <div><h2>Joueurs dans la partie (${on.length})</h2>
         <div class="plist">${OL.members.map((m, i) => orientii(m)).join('') || '<p class="dsub">En attente de joueurs…</p>'}</div>
       </div>
-      ${on.length >= 2 ? `<button class="act ok" style="width:100%" data-a="ogame">Commencer la partie</button>` : '<p class="dsub">Il faut au moins 2 joueurs pour commencer.</p>'}
+      ${on.length >= 2
+        ? (OL.myIndex === 0
+          ? `<button class="act ok" style="width:100%" data-a="ostart">🎲 Débuter la partie (${on.length} joueurs)</button>`
+          : '<p class="dsub">L\'hôte débutera la partie quand tout le monde est là.</p>')
+        : '<p class="dsub">Il faut au moins 2 joueurs pour commencer.</p>'}
       <button class="linkbtn" style="margin-top:10px" data-a="oleave">Quitter la partie</button>
     </div></div>`;
   }
