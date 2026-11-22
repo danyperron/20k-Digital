@@ -886,7 +886,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.56';
+  const VERSION = '3.57';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -943,7 +943,7 @@ h1 span{color:var(--muted);font-weight:600}
   function uid() {
     return 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   }
-  function findPlayer(id) { return roster.players.find(p => p.id === id) || null; }
+  function findPlayer(id) { const s = String(id); return roster.players.find(p => String(p.id) === s) || null; }
 
   const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
@@ -1261,20 +1261,47 @@ h1 span{color:var(--muted);font-weight:600}
       case 'setcolor': editingColor = String(v); render(); break;
       case 'psave': {  // enregistrer le formulaire de l'éditeur de joueurs
         const name = editingName.trim();
+        const connected = !!(OL.ws && OL.ws.readyState === 1);
         if (editingPlayer) {
           const p = findPlayer(editingPlayer);
-          if (p) { p.name = name || p.name; if (editingColor) p.color = editingColor; }
+          if (p) {
+            const newName = name || p.name;
+            const newColor = editingColor || p.color;
+            const idChanged = p.name !== newName || p.color !== newColor;
+            if (connected && typeof p.id === 'number') {
+              // pousser au serveur ; le retour <roster> met à jour le cache local
+              if (p.name !== newName) olSend({ type: 'rosterRename', id: p.id, name: newName });
+              if (p.color !== newColor) olSend({ type: 'rosterColor', id: p.id, color: newColor });
+              if (!idChanged) olSend({ type: 'rosterGet' });   // rien à changer, resynchronise
+            } else {
+              p.name = newName; p.color = newColor;
+              saveRoster();
+            }
+          }
         } else if (name) {
-          roster.players.push({ id: uid(), name, color: editingColor || PLAYER_COLORS[0], stats: { games: 0, wins: 0, points: 0 } });
+          if (connected) {
+            // le serveur attribue un id numérique via rosterAdd, puis renvoie le roster
+            olSend({ type: 'rosterAdd', name, color: editingColor || PLAYER_COLORS[0] });
+          } else {
+            roster.players.push({ id: uid(), name, color: editingColor || PLAYER_COLORS[0], stats: { games: 0, wins: 0, points: 0 } });
+            saveRoster();
+          }
         }
-        saveRoster(); editingPlayer = null; editingName = ''; editingColor = '';
+        editingPlayer = null; editingName = ''; editingColor = '';
         render(); break;
       }
       case 'pcancel': editingPlayer = null; editingName = ''; editingColor = ''; render(); break;
       case 'pdel': {   // supprimer un joueur
-        roster.players = roster.players.filter(p => p.id !== String(v));
-        DS.selected = (DS.selected || []).filter(x => x !== String(v));
-        saveRoster(); saveDes(); render(); break;
+        const id = String(v);
+        const p = findPlayer(id);
+        roster.players = roster.players.filter(x => String(x.id) !== id);
+        DS.selected = (DS.selected || []).filter(x => String(x) !== id);
+        saveRoster(); saveDes();
+        if (OL.ws && OL.ws.readyState === 1 && p && typeof p.id === 'number') {
+          olSend({ type: 'rosterDel', id: p.id });   // le serveur retire l'id (historique conservé)
+        }
+        if (OL.profile && OL.profile.id != null && String(OL.profile.id) === id) OL.profile = null;
+        render(); break;
       }
       case 'start': {
         const ids = (DS.selected || []).filter(id => findPlayer(id));
@@ -2149,7 +2176,7 @@ h1 span{color:var(--muted);font-weight:600}
     ws: null, connected: false, myIndex: -1, code: '', members: [],
     g: null, seq: 0, error: '', myTurn: false, turnProxy: null, lastSeq: 0,
     order: '', stealGain: 0, keptByRoll: [], leaving: false, profile: null, stealSource: -1,
-    stats: { byName: {}, games: [] }
+    stats: { byName: {}, byId: {}, games: [] }
   };
   function olSend(o) { if (OL.ws && OL.ws.readyState === 1) OL.ws.send(JSON.stringify(o)); }
   function olLog(m) {}
@@ -2175,8 +2202,11 @@ h1 span{color:var(--muted);font-weight:600}
       const who = olMyName();
       const color = olMyColor();
       const clientId = olClientId();
-      if (action === 'create') olSend({ type: 'create', name: who, color, clientId });
-      else olSend({ type: 'join', name: who, color, clientId });
+      const prof = olProfile();
+      const playerId = (prof && typeof prof.id === 'number') ? prof.id : null;
+      if (action === 'create') olSend({ type: 'create', name: who, color, clientId, playerId });
+      else olSend({ type: 'join', name: who, color, clientId, playerId });
+      olRosterSync();
     };
     conn.onmessage = e => { try { olHandle(JSON.parse(e.data)); } catch (err) {} };
     conn.onclose = () => { OL.connected = false; OL.ws = null;
@@ -2198,9 +2228,54 @@ h1 span{color:var(--muted);font-weight:600}
     return '#1f5fd6';
   }
   function olProfile() {
-    if (OL.profile) { const p = findPlayer(OL.profile); if (p) return p; }
+    const sel = OL.profile;
+    if (sel && (sel.id != null)) { const p = findPlayer(sel.id); if (p) return p; }
     if (roster && roster.players && roster.players.length) return roster.players[0];
     return null;
+  }
+  // Remplace le cache de répertoire local par la liste partagée du serveur,
+  // en conservant les stats cumulées locales et en remappant la sélection.
+  function olApplyServerRoster(srvPlayers) {
+    const prev = roster.players || [];
+    const byNumId = {}, byStrId = {}, byName = {};
+    prev.forEach(p => {
+      if (typeof p.id === 'number') byNumId[p.id] = p.stats;
+      else if (p.id != null) byStrId[String(p.id)] = p.stats;
+      if (p.name != null) byName[p.name] = p.stats;
+    });
+    const oldToNew = {};
+    const players = (srvPlayers || []).map(sp => {
+      const newId = (typeof sp.id === 'number') ? sp.id : uid();
+      // stats: priorité à l'id identique (statut synchro), puis au nom (migration string->number)
+      let stats = (typeof sp.id === 'number' && byNumId[sp.id]) || byStrId[String(sp.id)] || byName[sp.name];
+      stats = stats || { games: 0, wins: 0, points: 0 };
+      // mémoriser l'ancien id string -> nouveau id numérique (pour la sélection)
+      const oldP = prev.find(pp => pp.name === sp.name && typeof pp.id !== 'number');
+      if (oldP) oldToNew[String(oldP.id)] = newId;
+      else { const k = String(sp.id); if (k in byStrId) oldToNew[k] = newId; }
+      return { id: newId, name: sp.name, color: sp.color || PLAYER_COLORS[0], stats };
+    });
+    roster = { players, updatedAt: Date.now() };
+    saveRoster();
+    // remapper la sélection de la partie locale (DS.selected) et le profil sélectionné
+    const remap = id => String(id) in oldToNew ? oldToNew[String(id)] : id;
+    if (Array.isArray(DS.selected)) DS.selected = DS.selected.map(remap);
+    if (OL.profile && OL.profile.id != null) {
+      const selNew = remap(OL.profile.id);
+      const np = players.find(pp => String(pp.id) === String(selNew) && pp.name === OL.profile.name);
+      const npByName = players.find(pp => pp.name === OL.profile.name);
+      OL.profile = np || npByName ? { id: (np || npByName).id, name: (np || npByName).name } : null;
+    }
+  }
+  // Synchronisation initiale : migration une fois (string -> numérique) sinon lecture.
+  function olRosterSync() {
+    if (!OL.ws || OL.ws.readyState !== 1) return;
+    const hasStr = (roster.players || []).some(p => !(typeof p.id === 'number'));
+    if (hasStr) {
+      olSend({ type: 'rosterSave', players: (roster.players || []).map(p => ({ id: p.id, name: p.name, color: p.color })) });
+    } else {
+      olSend({ type: 'rosterGet' });
+    }
   }
   function olDisconnect() {
     OL.leaving = true;
@@ -2209,14 +2284,14 @@ h1 span{color:var(--muted);font-weight:600}
     OL.g = null; OL.myTurn = false; OL.turnProxy = null; OL.leaving = false;
   }
   function olEnsureConn() {
-    if (OL.connected) { olAskStats(); return; }
+    if (OL.connected) { olRosterSync(); olAskStats(); return; }
     let W = null;
     try { W = window.WebSocket; } catch (e) {}
     if (!W) { OL.error = 'WebSocket non supporté.'; render(); return; }
     let conn;
     try { conn = new W(olWsUrl('m')); } catch (e) { OL.error = 'Connexion impossible.'; render(); return; }
     OL.ws = conn;
-    conn.onopen = () => { OL.connected = true; olAskStats(); };
+    conn.onopen = () => { OL.connected = true; olRosterSync(); olAskStats(); };
     conn.onmessage = e => { try { olHandle(JSON.parse(e.data)); } catch (err) {} };
     conn.onclose = () => { if (!OL.leaving) OL.error = 'Serveur injoignable.'; OL.connected = false; OL.ws = null; OL.leaving = false; render(); };
     conn.onerror = () => { OL.error = 'Connexion au serveur impossible.'; };
@@ -2225,7 +2300,8 @@ h1 span{color:var(--muted);font-weight:600}
     switch (msg.type) {
       case 'created': OL.code = msg.code; OL.myIndex = msg.playerIndex; OL.members = msg.members || []; DS.screen = 'host'; olAskStats(); break;
       case 'welcome': OL.code = msg.code; OL.myIndex = msg.playerIndex; OL.members = msg.members || []; DS.screen = 'ogame'; olAskStats(); break;
-      case 'stats': OL.stats = { byName: msg.byName || {}, games: msg.games || [] }; break;
+      case 'stats': OL.stats = { byName: msg.byName || {}, byId: msg.byId || {}, games: msg.games || [] }; break;
+      case 'roster': olApplyServerRoster(msg.players || []); olAskStats(); break;
       case 'state': OL.g = msg.g; OL.seq = msg.seq; OL.members = (msg.g && msg.g.members) || OL.members; OL.keptByRoll = (msg.g && msg.g.keptByRoll) || []; refreshMyTurn(); maybeStart(); break;
       case 'turn': OL.g = msg.g; OL.seq = msg.seq; OL.keptByRoll = (msg.g && msg.g.keptByRoll) || []; refreshMyTurn(); break;
       case 'peerState': OL.members = msg.members || OL.members; refreshMyTurn(); maybeStart(); break;
@@ -2241,20 +2317,23 @@ h1 span{color:var(--muted);font-weight:600}
   return b;
 }
 function olAskStats() {
-  const names = (roster.players || []).map(p => p.name);
-  const q = names.map(n => encodeURIComponent(n)).join(',');
+  const players = roster.players || [];
+  const names = players.map(p => p.name);
+  const ids = players.map(p => (typeof p.id === 'number' ? p.id : null)).filter(x => x != null);
+  let q = 'names=' + names.map(n => encodeURIComponent(n)).join(',');
+  if (ids.length) q += '&ids=' + ids.join(',');
   // Via HTTP /stats (worker) avec repli WebSocket sur le serveur de dev.
   if (typeof fetch === 'function') {
-    fetch(olHttpBase() + '/stats?names=' + q)
+    fetch(olHttpBase() + '/stats?' + q)
       .then(r => r.json().then(d => ({ ok: r.ok, d })).catch(() => ({ ok: false })))
       .then(({ ok, d }) => {
-        if (ok && d && d.byName) { OL.stats = d; render(); }
-        else olSend({ type: 'getStats', names });   // repli WebSocket (serveur de dev)
+        if (ok && d && d.byName) { OL.stats = { byName: d.byName || {}, byId: d.byId || {}, games: d.games || [] }; render(); }
+        else olSend({ type: 'getStats', names, ids: ids.length ? ids : undefined });   // repli WebSocket (serveur de dev)
       })
-      .catch(() => olSend({ type: 'getStats', names }));
+      .catch(() => olSend({ type: 'getStats', names, ids: ids.length ? ids : undefined }));
     return;
   }
-  olSend({ type: 'getStats', names });
+  olSend({ type: 'getStats', names, ids: ids.length ? ids : undefined });
 }
   function refreshMyTurn() {
     if (!OL.g) { OL.myTurn = false; return; }
@@ -2273,7 +2352,7 @@ function olAskStats() {
       case 'oinput': OL.order = String(v == null ? '' : v).slice(0, 4); break;
       case 'oleave': olDisconnect(); DS.screen = 'setup-des'; break;
       case 'ostats': DS.screen = 'ostats'; OL.error = ''; olEnsureConn(); break;
-      case 'osetp': OL.profile = String(v); break;
+      case 'osetp': { const p = findPlayer(String(v)); OL.profile = p ? { id: p.id, name: p.name } : null; render(); break; }
       case 'obank': {  // le joueur actif encaisse depuis son tour local (normal ou vol)
         const t = OL.turnProxy;
         if (!t || !OL.myTurn) break;
@@ -2319,8 +2398,11 @@ function olAskStats() {
   }
   function viewOStats() {
     const bl = OL.stats && OL.stats.byName;
+    const bi = OL.stats && OL.stats.byId;
     const rows = (roster.players || []).map(p => {
-      const s = (bl && bl[p.name]) || { games: 0, wins: 0, points: 0 };
+      // stats par id numérique (l'historique suit l'id, pas le nom renommé)
+      let s = (typeof p.id === 'number' && bi && bi[p.id]) || (bl && bl[p.name]);
+      s = s || { games: 0, wins: 0, points: 0 };
       const pctW = s.games ? Math.round((s.wins / s.games) * 100) : 0;
       return `<div class="prow"><span class="avat" style="background:${p.color}">${esc((p.name[0] || '?').toUpperCase())}</span>
         <div class="pinfo"><b>${esc(p.name)}</b>
@@ -2352,7 +2434,7 @@ function olAskStats() {
         (un code à 4 chiffres s'affiche), les autres la rejoignent avec ce code.</p>
       <div><h2>Mon joueur</h2>
         ${roster.players.length ? `<div class="pchips">${roster.players.map(p => {
-          const on = (OL.profile === p.id);
+          const on = (OL.profile && OL.profile.id != null) && (String(OL.profile.id) === String(p.id));
           return `<button class="pchip${on ? ' on' : ''}" data-a="osetp" data-v="${esc(p.id)}" aria-pressed="${on}">
             <span class="avat" style="background:${p.color}">${esc((p.name[0] || '?').toUpperCase())}</span>
             <span class="pnm">${esc(p.name)}</span>
