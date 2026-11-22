@@ -886,7 +886,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.57';
+  const VERSION = '3.58';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -1250,7 +1250,7 @@ h1 span{color:var(--muted);font-weight:600}
         saveDes();
         break;
       }
-      case 'roster': DS.screen = 'roster'; saveDes(); break;
+      case 'roster': DS.screen = 'roster'; saveDes(); OL.error = ''; olEnsureConn(); break;
       case 'backdes': DS.screen = 'setup-des'; saveDes(); break;
       case 'pedit':   // éditer un joueur (v=id, vide = nouveau)
         if (v) { const p = findPlayer(v); editingName = p ? p.name : ''; editingColor = p ? p.color : ''; }
@@ -2207,11 +2207,13 @@ h1 span{color:var(--muted);font-weight:600}
       if (action === 'create') olSend({ type: 'create', name: who, color, clientId, playerId });
       else olSend({ type: 'join', name: who, color, clientId, playerId });
       olRosterSync();
+      olStartRosterPoll();
     };
     conn.onmessage = e => { try { olHandle(JSON.parse(e.data)); } catch (err) {} };
     conn.onclose = () => { OL.connected = false; OL.ws = null;
       if (!OL.leaving) { OL.error = 'Impossible de joindre le serveur en ligne. Déployez le serveur (dev/README-online.md) puis configurez son URL dans localStorage[\'20k-ws\'].'; }
       OL.leaving = false;
+      olStopRosterPoll();
       render(); };
     conn.onerror = () => { OL.error = 'Connexion au serveur impossible.'; render(); };
   }
@@ -2255,6 +2257,16 @@ h1 span{color:var(--muted);font-weight:600}
       else { const k = String(sp.id); if (k in byStrId) oldToNew[k] = newId; }
       return { id: newId, name: sp.name, color: sp.color || PLAYER_COLORS[0], stats };
     });
+    // FUSION : ne jamais perdre un joueur local PAS ENCORE migré (id chaîne) qui n'est
+    // pas encore sur le serveur. Il reste en attente tant que la migration rosterSave
+    // ne l'a pas fait apparaître côté serveur. Sinon un poll précoce l'effacerait.
+    const srvNames = new Set(players.map(p => String(p.name).toLowerCase()));
+    prev.forEach(p => {
+      if (typeof p.id === 'number') return;           // déjà synchro, géré ci-dessus
+      if (srvNames.has(String(p.name).toLowerCase())) return;  // déjà sur serveur
+      const pending = { id: p.id, name: p.name, color: p.color, stats: p.stats || { games: 0, wins: 0, points: 0 } };
+      if (!players.some(x => String(x.id) === String(p.id))) players.push(pending);  // garder l'en attente
+    });
     roster = { players, updatedAt: Date.now() };
     saveRoster();
     // remapper la sélection de la partie locale (DS.selected) et le profil sélectionné
@@ -2277,23 +2289,62 @@ h1 span{color:var(--muted);font-weight:600}
       olSend({ type: 'rosterGet' });
     }
   }
+  // Signature compacte du répertoire pour détecter un changement (évite un re-render inutile).
+  function rosterSig() {
+    return (roster.players || []).map(p => p.id + '|' + p.name + '|' + p.color).join('\u0001');
+  }
+  // Re-synchronisation TEMPS RÉEL : pendant qu'on est connecté et sur un écran
+  // répertoire / en ligne, on re-pull le répertoire partagé à intervalles réguliers.
+  // Ainsi, un joueur ajouté/renommé/effacé sur un autre appareil apparaît ici
+  // automatiquement, sans rechargement. En production : GET /roster (HTTP).
+  // En dev : repli WebSocket rosterGet.
+  let rosterPollTimer = 0;
+  function olStartRosterPoll() {
+    if (rosterPollTimer) return;
+    rosterPollTimer = setInterval(olRosterPoll, 2500);
+  }
+  function olStopRosterPoll() {
+    if (rosterPollTimer) { clearInterval(rosterPollTimer); rosterPollTimer = 0; }
+  }
+  function olRosterPoll() {
+    if (!OL.connected) return;
+    const s = DS.screen;
+    // Poll seulement hors partie active : écran répertoire, choix Mon joueur,
+    // hôte (liste des joueurs), stats. Pendant une partie en cours on ne veut
+    // pas perturber l'affichage du tour.
+    if (!(s === 'roster' || s === 'ojoin' || s === 'host' || s === 'ostats')) return;
+    const before = rosterSig();
+    const done = () => { if (rosterSig() !== before) render(); };
+    if (typeof fetch === 'function') {
+      fetch(olHttpBase() + '/roster')
+        .then(r => r.json().then(d => ({ ok: r.ok, d })).catch(() => ({ ok: false })))
+        .then(({ ok, d }) => {
+          if (ok && d && Array.isArray(d.players)) { olApplyServerRoster(d.players); done(); }
+          else if (OL.ws && OL.ws.readyState === 1) { olSend({ type: 'rosterGet' }); }
+        })
+        .catch(() => { if (OL.ws && OL.ws.readyState === 1) olSend({ type: 'rosterGet' }); });
+    } else if (OL.ws && OL.ws.readyState === 1) {
+      olSend({ type: 'rosterGet' });
+    }
+  }
   function olDisconnect() {
     OL.leaving = true;
     try { if (OL.ws) OL.ws.close(); } catch (e) {}
     OL.ws = null; OL.connected = false; OL.myIndex = -1; OL.code = ''; OL.members = [];
     OL.g = null; OL.myTurn = false; OL.turnProxy = null; OL.leaving = false;
+    olStopRosterPoll();
   }
   function olEnsureConn() {
-    if (OL.connected) { olRosterSync(); olAskStats(); return; }
+    if (OL.connected) { olRosterSync(); olStartRosterPoll(); olAskStats(); return; }
     let W = null;
     try { W = window.WebSocket; } catch (e) {}
     if (!W) { OL.error = 'WebSocket non supporté.'; render(); return; }
     let conn;
     try { conn = new W(olWsUrl('m')); } catch (e) { OL.error = 'Connexion impossible.'; render(); return; }
     OL.ws = conn;
-    conn.onopen = () => { OL.connected = true; olRosterSync(); olAskStats(); };
+    conn.onopen = () => { OL.connected = true; olRosterSync(); olStartRosterPoll(); olAskStats(); };
     conn.onmessage = e => { try { olHandle(JSON.parse(e.data)); } catch (err) {} };
-    conn.onclose = () => { if (!OL.leaving) OL.error = 'Serveur injoignable.'; OL.connected = false; OL.ws = null; OL.leaving = false; render(); };
+    conn.onclose = () => { if (!OL.leaving) OL.error = 'Serveur injoignable.'; OL.connected = false; OL.ws = null; OL.leaving = false; olStopRosterPoll(); render(); };
     conn.onerror = () => { OL.error = 'Connexion au serveur impossible.'; };
   }
   function olHandle(msg) {
