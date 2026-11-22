@@ -886,7 +886,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.64';
+  const VERSION = '3.65';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -2480,6 +2480,13 @@ function olAskStats() {
   function refreshMyTurn() {
     if (!OL.g) { OL.myTurn = false; return; }
     OL.myTurn = (OL.myIndex === OL.g.current) && OL.g.winner === null;
+    // Si ce n'est plus notre tour (ou partie passée), on nettoie l'état local d'un vol/lancer
+    // pour éviter qu'un vol « en cours » fantôme ne s'affiche au prochain tour (bug cellulaire).
+    if (!OL.myTurn) {
+      OL.stealSource = -1; OL.stealGain = 0;
+      // on garde turnProxy seulement si on est en plein lancer et que c'est notre tour ; ici on le nettoie.
+    }
+    if (OL.g.winner !== null) OL.stealSource = -1;
   }
   function onlineCount() { return OL.members.filter(m => m.online !== false).length; }
   // Empêche de choisir un joueur DÉJÀ présent dans la partie (évite 2 fois la même personne).
@@ -2684,13 +2691,14 @@ function olAskStats() {
     const journal = jlog.length ? `<details class="des-log" open><summary>Journal des tours (${jlog.length})</summary>
       ${jlog.map((e, i1) => {
         const nm = esc(g.names[e.i] || '?');
-        // Libellés du journal : +points (vert) ; perdu = 0 gris ; vol tenté / raté / réussi.
-        let lab = '', cls = '', extra = '';
-        if (e.kind === 'vol-attempt') { lab = 'Vol ' + (e.diceN ? '(' + e.diceN + ' dés) ' : '') + '?'; cls = ' vol'; }
+        // Libellés : +pts (vert, sans nb de dés) ; perdu/trop = 0 gris ; vol informatifs.
+        let lab = '', cls = '';
+        if (e.kind === 'vol-attempt') { lab = 'Tentative de vol (' + (e.diceN || '?') + ' dés)'; cls = ' vol'; }
         else if (e.kind === 'vol-fail') { lab = 'Vol raté' + (e.diceN ? ' (' + e.diceN + ' dés)' : ''); cls = ' none'; }
-        else if (e.kind === 'vol-bank') { lab = '+'+fmt(e.amount||0)+' volé' + (e.diceN ? ' · '+e.diceN+' dés' : ''); cls = ' vol'; }
+        else if (e.kind === 'vol-bank') { lab = '+'+fmt(e.amount||0)+' volé' + (e.diceN ? ' (' + e.diceN + ' dés)' : ''); cls = ' vol'; }
         else if (e.kind === 'perdu') { lab = '0'; cls = ' none'; }
-        else { lab = '+'+fmt(e.amount||0) + (e.diceN ? ' · '+e.diceN+' dés' : ''); cls = ' lv'; }
+        else if (e.kind === 'trop') { lab = 'Trop'; cls = ' none'; }
+        else { lab = '+'+fmt(e.amount||0); cls = ' lv'; }
         return `<div class="dlogrow"><span class="ln">T${jlog.length - i1}</span><span class="lnm">${nm}</span>
           <span class="lv${cls}">${lab}</span><span class="ls">= ${fmt(e.total || 0)}</span></div>`;
       }).join('')}</details>` : '';
@@ -2718,13 +2726,13 @@ function olAskStats() {
         && myScore >= T.VOL_PASSEPORT && T.canVol(myScore, vt.gain, 0, DES_TARGET);
       const ld = vt && vt.leftoverDice;
       const volDice = (ld && ld.length) ? ld.length : 6;
-      const volMsg = canOffer
-        ? `<div class="dmsg good">🔓 Vol possible : partir de ${fmt(volDice)} dés restants de <b>${esc((OL.g.names[vt.player]) || '?')}</b> — gain ${fmt(vt.gain)} à copier.</div>` : '';
+      // Texte de l'offre réduit : on n'affiche plus le bandeau « Vol possible : partir des
+      // dés restants de X — gain Y à copier » (superflu), mais on montre le nb de dés sur
+      // le bouton « Voler Y (n dés) ».
       return `<div class="dgrid"><div class="dgroup"><small>Prêt à lancer</small>
         <div class="div">${[1,2,3,4,5,6].map(v => dDie(v, false, '')).join('')}</div></div></div>
-        ${volMsg}
         <div class="actions" style="grid-template-columns:${canOffer ? '1fr 1fr' : '1fr'};margin-top:8px">
-          ${canOffer ? `<button class="act purple" data-a="ovol">🔓 Voler ${fmt(vt.gain)}</button>` : ''}
+          ${canOffer ? `<button class="act purple" data-a="ovol">🔓 Voler ${fmt(vt.gain)} (${volDice} dés)</button>` : ''}
           <button class="act ok" data-a="oroll">🎲 Lancer les dés</button>
         </div>`;
     }
@@ -2756,17 +2764,23 @@ function olAskStats() {
           ${inSteal ? `<span class="dgain">(+ ${fmt(OL.stealGain || 0)} volés)</span>` : ''}</p>` : ''}
         ${hint}`;
     }
-    const canBank = !perdu && tp.score >= (inSteal ? DES_VOL_MIN_PROD : (myScore > 0 ? 1 : T.OUVRAGE));
+    const restant = DES_TARGET - myScore;
+    // On ne peut pas encaisser plus que le restant (il faut atteindre 20000 pile).
+    // Si le jet dépasse, on affiche « trop » et on ne permet PAS d'encaisser (on passe).
+    const trop = !perdu && !inSteal && tp.score != null && tp.score > restant;
+    const canBank = !perdu && !trop && tp.score >= (inSteal ? DES_VOL_MIN_PROD : (myScore > 0 ? 1 : T.OUVRAGE));
     const diceBadge = !perdu
       ? `<span class="diceleft" style="color:${dieValueColor(diceLeft)};border-color:${dieValueColor(diceLeft)};background:${dieValueColor(diceLeft)}1f" title="Nombre de dés qu'on va relancer">${diceLeft} dés</span>` : '';
+    const tropMsg = trop ? `<div class="dmsg warn">⚖️ C'est trop : ${fmt(tp.score)} dépasse le restant (${fmt(restant)}). Tu ne peux pas encaisser — passe ton tour (dés perdus).</div>` : '';
     const volMsg = inSteal && OL.g && OL.g.prevTurn
       ? `<div class="dmsg"><b>Vol en cours</b> : dés restants de <b>${esc((OL.g.names[OL.stealSource]) || '?')}</b> — ${fmt(OL.stealGain || 0)} pts volés à copier. Encaisser ajoutera ton score + le vol.</div>` : '';
     return `<div class="dgrid">${cells}</div>
-      <div class="dice-wrap"><span></span>${diceBadge}<button class="reroll" data-a="oroll" style="flex:1" ${perdu ? 'disabled' : ''}>${perdu ? 'Relancer / finir' : 'Relancer'}</button></div>
+      <div class="dice-wrap"><span></span>${diceBadge}<button class="reroll" data-a="oroll" style="flex:1" ${perdu ? 'disabled' : ''}>${perdu || trop ? 'Relancer' : 'Relancer'}</button></div>
+      ${tropMsg}
       ${volMsg}
-      <div class="actions" style="grid-template-columns:${perdu ? '1fr 1fr' : '1fr'};margin-top:8px">
-        ${perdu
-          ? `<button class="act slate" data-a="olost">Passer à ${esc((OL.g && OL.g.names[dNextI()]) || '')}</button>`
+      <div class="actions" style="grid-template-columns:${(perdu || trop) ? '1fr' : '1fr'};margin-top:8px">
+        ${(perdu || trop)
+          ? `<button class="act slate" data-a="olost">C'est trop — passer à ${esc((OL.g && OL.g.names[dNextI()]) || '')}</button>`
           : ''}
       </div>
       <div class="actions" style="grid-template-columns:1fr;margin-top:8px">
