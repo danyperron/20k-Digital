@@ -886,7 +886,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.65';
+  const VERSION = '3.66';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -2193,6 +2193,15 @@ h1 span{color:var(--muted);font-weight:600}
       if (!c) { c = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); localStorage.setItem('20k-ws-client', c); }
       return c; } catch (e) { return 'c' + Math.random().toString(36).slice(2, 8); }
   }
+  // Après un ré-ordonnancement aléatoire au démarrage, on retrouve sa place en comparant
+  // son clientId (= l'appareil). Utile aussi pour une reconnexion à une partie en cours.
+  function olReseat() {
+    const mem = OL.members || [];
+    if (!mem.some(m => typeof m.clientId === 'string')) return; // pas d'info clientId -> rien
+    const cid = olClientId();
+    const hit = mem.find(m => m.clientId === cid);
+    if (hit && Number.isInteger(hit.index) && hit.index !== OL.myIndex) OL.myIndex = hit.index;
+  }
   // Mémorise la salle (code 4 chiffres) pour permettre une reconnexion après coupure.
   // Ce device peut ensuite la reprendre (rejoindre) si la partie est toujours ouverte.
   function olRememberRoom(code) {
@@ -2444,8 +2453,8 @@ h1 span{color:var(--muted);font-weight:600}
         olRememberRoom(msg.code); olCheckDuplicate(); olAskStats(); break;
       case 'stats': OL.stats = { byName: msg.byName || {}, byId: msg.byId || {}, games: msg.games || [] }; break;
       case 'roster': olApplyServerRoster(msg.players || []); olAskStats(); break;
-      case 'state': OL.g = msg.g; OL.seq = msg.seq; OL.members = (msg.g && msg.g.members) || OL.members; OL.keptByRoll = (msg.g && msg.g.keptByRoll) || []; refreshMyTurn(); maybeStart(); break;
-      case 'turn': OL.g = msg.g; OL.seq = msg.seq; OL.keptByRoll = (msg.g && msg.g.keptByRoll) || []; refreshMyTurn(); maybeStart(); break;
+      case 'state': OL.g = msg.g; OL.seq = msg.seq; OL.members = (msg.g && msg.g.members) || OL.members; OL.keptByRoll = (msg.g && msg.g.keptByRoll) || []; olReseat(); refreshMyTurn(); maybeStart(); break;
+      case 'turn': OL.g = msg.g; OL.seq = msg.seq; OL.keptByRoll = (msg.g && msg.g.keptByRoll) || []; olReseat(); refreshMyTurn(); maybeStart(); break;
       case 'peerState': OL.members = msg.members || OL.members; refreshMyTurn(); maybeStart(); break;
       case 'error': OL.error = msg.msg || msg.title || ''; break;
       case 'createdHost': break;
