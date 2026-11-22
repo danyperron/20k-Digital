@@ -886,7 +886,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.58';
+  const VERSION = '3.59';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -1267,12 +1267,16 @@ h1 span{color:var(--muted);font-weight:600}
           if (p) {
             const newName = name || p.name;
             const newColor = editingColor || p.color;
-            const idChanged = p.name !== newName || p.color !== newColor;
-            if (connected && typeof p.id === 'number') {
-              // pousser au serveur ; le retour <roster> met à jour le cache local
-              if (p.name !== newName) olSend({ type: 'rosterRename', id: p.id, name: newName });
-              if (p.color !== newColor) olSend({ type: 'rosterColor', id: p.id, color: newColor });
-              if (!idChanged) olSend({ type: 'rosterGet' });   // rien à changer, resynchronise
+            if (connected) {
+              if (typeof p.id === 'number') {
+                // Mutation via HTTP /roster (worker) ; repli WS si HTTP échoue.
+                if (p.name !== newName) olRosterMutate({ op: 'rename', id: p.id, name: newName }, { type: 'rosterRename', id: p.id, name: newName });
+                if (p.color !== newColor) olRosterMutate({ op: 'color', id: p.id, color: newColor }, { type: 'rosterColor', id: p.id, color: newColor });
+                if (p.name === newName && p.color === newColor) olRosterMutate({ op: 'get' }, { type: 'rosterGet' });
+              } else {
+                // pas encore migré : maj locale, la synchro le poussera
+                p.name = newName; p.color = newColor; saveRoster();
+              }
             } else {
               p.name = newName; p.color = newColor;
               saveRoster();
@@ -1280,8 +1284,8 @@ h1 span{color:var(--muted);font-weight:600}
           }
         } else if (name) {
           if (connected) {
-            // le serveur attribue un id numérique via rosterAdd, puis renvoie le roster
-            olSend({ type: 'rosterAdd', name, color: editingColor || PLAYER_COLORS[0] });
+            // Ajout via HTTP /roster (worker) : le serveur attribue un id numérique.
+            olRosterMutate({ op: 'add', name, color: editingColor || PLAYER_COLORS[0] }, { type: 'rosterAdd', name, color: editingColor || PLAYER_COLORS[0] });
           } else {
             roster.players.push({ id: uid(), name, color: editingColor || PLAYER_COLORS[0], stats: { games: 0, wins: 0, points: 0 } });
             saveRoster();
@@ -1298,7 +1302,9 @@ h1 span{color:var(--muted);font-weight:600}
         DS.selected = (DS.selected || []).filter(x => String(x) !== id);
         saveRoster(); saveDes();
         if (OL.ws && OL.ws.readyState === 1 && p && typeof p.id === 'number') {
-          olSend({ type: 'rosterDel', id: p.id });   // le serveur retire l'id (historique conservé)
+          // Suppression via HTTP /roster (worker) ; repli WS. Le serveur retire l'id
+          // (jamais réattribué) et conserve l'historique des stats.
+          olRosterMutate({ op: 'del', id: p.id }, { type: 'rosterDel', id: p.id });
         }
         if (OL.profile && OL.profile.id != null && String(OL.profile.id) === id) OL.profile = null;
         render(); break;
@@ -2280,13 +2286,26 @@ h1 span{color:var(--muted);font-weight:600}
     }
   }
   // Synchronisation initiale : migration une fois (string -> numérique) sinon lecture.
+  // Passe par HTTP GET/POST /roster (le worker CF ne gère le répertoire QUE par HTTP).
   function olRosterSync() {
-    if (!OL.ws || OL.ws.readyState !== 1) return;
     const hasStr = (roster.players || []).some(p => !(typeof p.id === 'number'));
-    if (hasStr) {
-      olSend({ type: 'rosterSave', players: (roster.players || []).map(p => ({ id: p.id, name: p.name, color: p.color })) });
-    } else {
-      olSend({ type: 'rosterGet' });
+    if (typeof fetch === 'function') {
+      fetch(olHttpBase() + '/roster')
+        .then(r => r.json().then(d => ({ ok: r.ok, d })).catch(() => ({ ok: false, d: null })))
+        .then(({ ok, d }) => {
+          if (ok && d && Array.isArray(d.players)) {
+            olApplyServerRoster(d.players);
+            // Migration : s'il reste un id chaîne local (pas encore sur serveur), on l'envoie.
+            const stillStr = (roster.players || []).some(p => !(typeof p.id === 'number'));
+            if (stillStr) olRosterMutate({ op: 'save', players: (roster.players || []).map(p => ({ id: p.id, name: p.name, color: p.color })) }, { type: 'rosterSave', players: (roster.players || []).map(p => ({ id: p.id, name: p.name, color: p.color })) });
+          } else if (OL.ws && OL.ws.readyState === 1) olSend({ type: 'rosterGet' });
+        })
+        .catch(() => { if (OL.ws && OL.ws.readyState === 1) olSend({ type: 'rosterGet' }); });
+      return;
+    }
+    if (OL.ws && OL.ws.readyState === 1) {
+      if (hasStr) olSend({ type: 'rosterSave', players: (roster.players || []).map(p => ({ id: p.id, name: p.name, color: p.color })) });
+      else olSend({ type: 'rosterGet' });
     }
   }
   // Signature compacte du répertoire pour détecter un changement (évite un re-render inutile).
@@ -2305,6 +2324,31 @@ h1 span{color:var(--muted);font-weight:600}
   }
   function olStopRosterPoll() {
     if (rosterPollTimer) { clearInterval(rosterPollTimer); rosterPollTimer = 0; }
+  }
+  // Mute le répertoire via HTTP POST /roster (même protocole que le worker CF).
+  // C'est le chemin utilisable en production : le worker ne traite PAS les mutations
+  // roster sur le WebSocket de la salle (elles vont au DO Roster par HTTP).
+  // En cas d'échec HTTP, repli WebSocket (ancien serveur de dev).
+  // cb(msg) reçoit éventuellement un message d'erreur ({msg}) à afficher.
+  function olRosterMutate(opBody, wsMsg, cb) {
+    const applyIf = () => { try { if (cb) cb(null); } catch (e) {} };
+    if (typeof fetch === 'function') {
+      const path = olHttpBase() + '/roster';
+      fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(opBody) })
+        .then(r => r.json().then(d => ({ ok: r.ok, d })).catch(() => ({ ok: false, d: null })))
+        .then(({ ok, d }) => {
+          if (ok && d && Array.isArray(d.players)) {
+            const before = rosterSig();
+            olApplyServerRoster(d.players);
+            if (rosterSig() !== before) render();   // rafraîchit l'écran dès la réponse serveur
+            applyIf();
+          } else if (OL.ws && OL.ws.readyState === 1) olSend(wsMsg);
+          else applyIf();
+        })
+        .catch(() => { if (OL.ws && OL.ws.readyState === 1) olSend(wsMsg); else applyIf(); });
+    } else if (OL.ws && OL.ws.readyState === 1) {
+      olSend(wsMsg);
+    } else applyIf();
   }
   function olRosterPoll() {
     if (!OL.connected) return;
