@@ -886,7 +886,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.61';
+  const VERSION = '3.62';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -2279,6 +2279,10 @@ h1 span{color:var(--muted);font-weight:600}
     if (roster && roster.players && roster.players.length) return roster.players[0];
     return null;
   }
+  // Un « Mon joueur » EXPRESSIONNEL sélectionné ? (on n'utilise pas la retombée roster[0]).
+  function olHaveProfile() {
+    return !!(OL.profile && OL.profile.id != null && findPlayer(OL.profile.id));
+  }
   // Remplace le cache de répertoire local par la liste partagée du serveur,
   // en conservant les stats cumulées locales et en remappant la sélection.
   function olApplyServerRoster(srvPlayers) {
@@ -2480,10 +2484,11 @@ function olAskStats() {
   // ---- Actions en ligne ----
   function oDo(action, v) {
     switch (action) {
-      case 'online': OL.order = ''; OL.error = ''; DS.screen = 'ojoin'; break;
-      case 'ocreate': OL.error = ''; olConnect('create'); break;
-      case 'ojoin': OL.error = ''; olConnect('join'); break;
+      case 'online': OL.order = ''; OL.error = ''; DS.screen = 'ojoin'; olInitProfile(); render(); break;
+      case 'ocreate': OL.error = ''; if (!olHaveProfile()) { OL.error = 'Sélectionnez votre joueur (Mon joueur) avant de créer.'; render(); break; } olConnect('create'); break;
+      case 'ojoin': OL.error = ''; if (!olHaveProfile()) { OL.error = 'Sélectionnez votre joueur (Mon joueur) avant de rejoindre.'; render(); break; } olConnect('join'); break;
       case 'orejoin': {  // reprendre une partie interrompue (code mémorisé)
+        if (!olHaveProfile()) { OL.error = 'Sélectionnez votre joueur (Mon joueur) avant de reprendre.'; render(); break; }
         const saved = olSavedRoom();
         if (saved) { OL.order = saved; OL.error = ''; olConnect('join'); }
         break; }
@@ -2582,6 +2587,7 @@ function olAskStats() {
         : '<p class="dsub">Ajoutez d\'abord un joueur dans le répertoire (bouton ci-dessous).</p>'}
       </div>
       <div><h2>Créer une partie</h2>
+        ${!olHaveProfile() ? '<p class="dsub" style="color:#c0392b">Choisissez d\'abord votre joueur ci-dessus.</p>' : ''}
         <button class="act ok" style="width:100%" data-a="ocreate">Créer une partie</button></div>
       <div><h2>Rejoindre une partie</h2>
         <input type="text" id="o-code" autocomplete="off" inputmode="numeric" maxlength="4"
