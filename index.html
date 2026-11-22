@@ -886,7 +886,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.70';
+  const VERSION = '3.71';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -2026,7 +2026,7 @@ h1 span{color:var(--muted);font-weight:600}
         <span class="rt"><b>Reprendre la partie en cours</b>
         <small>${lead}${DS.players.length > 4 ? ' …' : ''}</small></span>${ICON.chev}
       </button>` : ''}
-      ${DS.stats.length ? `<div class="past"><h2>Parties terminées</h2>
+      ${DS.stats.length ? `<div class="past"><h2>Parties terminées (cet appareil)</h2>
         ${DS.stats.slice().reverse().map((g, ri) => {
           const idx = DS.stats.length - 1 - ri;
           const date = new Date(g.ts).toLocaleDateString('fr-CA', { day: 'numeric', month: 'short' });
@@ -2035,7 +2035,9 @@ h1 span{color:var(--muted);font-weight:600}
           return `<button class="pastrow" data-a="detview" data-v="${idx}">
             <span class="rt"><b>🏆 ${winName}</b><small>${date} · ${scores} · ${g.jets} jet${g.jets===1?'':'s'} — voir le détail</small></span>${ICON.chev}
           </button>`;
-        }).join('')}</div>` : ''}
+        }).join('')}</div>`
+      : ''}
+      ${DS.stats.length ? '' : ''}
       <div><h2>Joueurs de la partie <span class="cnt">${sel.length}</span></h2>${playersHtml}</div>
       <ul class="rules">
         <li>6 dés : garde les dés qui rapportent, relance le reste</li>
@@ -2044,7 +2046,8 @@ h1 span{color:var(--muted);font-weight:600}
         <li>Objectif exact : <b>${fmt(20000)}</b></li>
       </ul>
       <button class="go" data-a="start" ${goDisabled ? 'disabled' : ''}>Commencer la partie (${sel.length} joueur${sel.length===1?'':'s'})</button>
-      <button class="act slate" data-a="online" style="width:100%">🌐 Jouer en ligne</button>
+      <button class="act slate" data-a="online" style="width:100%">🌐 Jouer en ligne (parties & historique en ligne)</button>
+      <button class="linkbtn" style="margin-top:6px" data-a="ostats">📊 Mes parties terminées en ligne</button>
       <p class="version">Version ${VERSION}</p>
     </div></div>`;
   }
@@ -2650,7 +2653,7 @@ function olAskStats() {
       ${OL.error ? `<div class="dmsg bad">${esc(OL.error)}</div>` : ''}
       <p class="dsub">Statistiques consolidées sur le serveur (toutes vos parties en ligne).</p>
       <div><h2>Par joueur du répertoire</h2><div class="plist">${rows || '<p class="dsub">Aucun joueur dans votre répertoire.</p>'}</div></div>
-      ${reg ? `<div><h2>Dernières parties terminées</h2><div>${reg}</div></div>` : ''}
+      ${reg ? `<div><h2>Parties terminées en ligne</h2><div>${reg}</div></div>` : ''}
       <button class="act slate" style="width:100%" data-a="refreshstats">Actualiser</button>
       <button class="linkbtn" style="margin-top:10px" data-a="backdes">← Retour</button>
       <p class="version">Version ${VERSION}</p>
