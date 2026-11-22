@@ -886,7 +886,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.68';
+  const VERSION = '3.69';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -1444,6 +1444,7 @@ h1 span{color:var(--muted);font-weight:600}
       case 'ojoin': oDo('ojoin'); break;
       case 'orejoin': oDo('orejoin'); break;
       case 'ostart': oDo('ostart'); break;
+      case 'orestart': oDo('orestart'); break;
       case 'oleave': oDo('oleave'); break;
       case 'obank': oDo('obank'); break;
       case 'olost': oDo('olost'); break;
@@ -1451,6 +1452,7 @@ h1 span{color:var(--muted);font-weight:600}
       case 'ovol': oDo('ovol'); break;
       case 'ostats': oDo('ostats'); break;
       case 'refreshstats': oDo('ostats'); break;
+      case 'logtoggle': oDo('logtoggle'); break;
       case 'oinput': oDo('oinput', v); break;
       case 'osetp': oDo('osetp', v); break;
       case 'ogame': DS.screen = 'ogame'; break;
@@ -2184,6 +2186,7 @@ h1 span{color:var(--muted);font-weight:600}
     ws: null, connected: false, myIndex: -1, code: '', members: [],
     g: null, seq: 0, error: '', myTurn: false, turnProxy: null, lastSeq: 0, keepError: false,
     order: '', stealGain: 0, keptByRoll: [], leaving: false, profile: null, stealSource: -1,
+    logAll: false,
     stats: { byName: {}, byId: {}, games: [] }
   };
   function olSend(o) { if (OL.ws && OL.ws.readyState === 1) OL.ws.send(JSON.stringify(o)); }
@@ -2537,11 +2540,17 @@ function olAskStats() {
         if (saved) { OL.order = saved; OL.error = ''; olConnect('join'); }
         break; }
       case 'oinput': OL.order = String(v == null ? '' : v).slice(0, 4); break;
+      case 'logtoggle': OL.logAll = !OL.logAll; render(); break;
       case 'oleave': olDisconnect(); DS.screen = 'setup-des'; break;
       case 'ostart': {  // l'hôte démarre la partie depuis le lobby
         if (OL.myIndex !== 0) break;
         OL.error = '';
         olSend({ type: 'action', seq: ++OL.lastSeq, act: { type: 'start' } });
+        break; }
+      case 'orestart': {  // nouvelle partie avec les mêmes joueurs (tirage au sort)
+        if (OL.myIndex !== 0) break;
+        OL.error = '';
+        olSend({ type: 'action', seq: ++OL.lastSeq, act: { type: 'restart' } });
         break; }
       case 'ostats': DS.screen = 'ostats'; OL.error = ''; olEnsureConn(); break;
       case 'osetp': { const p = findPlayer(String(v)); olSetProfile(p); render(); break; }
@@ -2715,28 +2724,40 @@ function olAskStats() {
       }
       orderBanner = `<div class="dmsg" style="margin-bottom:6px"><b>Tirage au sort</b> — ordre de jeu : ${seq.join(' → ')}</div>`;
     }
+    const showAll = OL.logAll;
+    const shown = showAll ? jlog : jlog.slice(0, 4);   // 4 derniers par défaut
+    const rowHtml = (e, i1) => {
+      const nm = esc(g.names[e.i] || '?');
+      let lab = '', cls = '';
+      if (e.kind === 'vol-attempt') { lab = 'Tentative de vol (' + (e.diceN || '?') + ' dés)'; cls = ' vol'; }
+      else if (e.kind === 'vol-fail') { lab = 'Vol raté' + (e.diceN ? ' (' + e.diceN + ' dés)' : ''); cls = ' none'; }
+      else if (e.kind === 'vol-bank') { lab = '+'+fmt(e.amount||0)+' volé' + (e.diceN ? ' (' + e.diceN + ' dés)' : ''); cls = ' vol'; }
+      else if (e.kind === 'perdu') { lab = '0'; cls = ' none'; }
+      else if (e.kind === 'trop') { lab = 'Trop'; cls = ' none'; }
+      else { lab = '+'+fmt(e.amount||0); cls = ' lv'; }
+      return `<div class="dlogrow"><span class="ln">T${jlog.length - i1}</span><span class="lnm">${nm}</span>
+        <span class="lv${cls}">${lab}</span><span class="ls">= ${fmt(e.total || 0)}</span></div>`;
+    };
     const journal = jlog.length ? `<details class="des-log" open><summary>Journal des tours (${jlog.length})</summary>
-      ${jlog.map((e, i1) => {
-        const nm = esc(g.names[e.i] || '?');
-        // Libellés : +pts (vert, sans nb de dés) ; perdu/trop = 0 gris ; vol informatifs.
-        let lab = '', cls = '';
-        if (e.kind === 'vol-attempt') { lab = 'Tentative de vol (' + (e.diceN || '?') + ' dés)'; cls = ' vol'; }
-        else if (e.kind === 'vol-fail') { lab = 'Vol raté' + (e.diceN ? ' (' + e.diceN + ' dés)' : ''); cls = ' none'; }
-        else if (e.kind === 'vol-bank') { lab = '+'+fmt(e.amount||0)+' volé' + (e.diceN ? ' (' + e.diceN + ' dés)' : ''); cls = ' vol'; }
-        else if (e.kind === 'perdu') { lab = '0'; cls = ' none'; }
-        else if (e.kind === 'trop') { lab = 'Trop'; cls = ' none'; }
-        else { lab = '+'+fmt(e.amount||0); cls = ' lv'; }
-        return `<div class="dlogrow"><span class="ln">T${jlog.length - i1}</span><span class="lnm">${nm}</span>
-          <span class="lv${cls}">${lab}</span><span class="ls">= ${fmt(e.total || 0)}</span></div>`;
-      }).join('')}</details>` : '';
+      ${shown.map(rowHtml).join('')}
+      ${jlog.length > 4 ? `<button class="linkbtn" style="margin:4px 0" data-a="logtoggle">${showAll ? '▲ Réduire (4 derniers)' : '▼ Voir tout (' + jlog.length + ' tours)'}</button>` : ''}</details>` : '';
+    // Fin de partie : proposer « nouvelle partie » (hôte) ou quitter.
+    const endBar = g.winner !== null
+      ? `<div class="actions" style="grid-template-columns:1fr;margin-top:10px">
+          ${OL.myIndex === 0
+            ? `<button class="act ok" data-a="orestart">♻️ Nouvelle partie (mêmes joueurs)</button>
+               <button class="act slate" style="margin-top:6px" data-a="oleave">Quitter la partie</button>`
+            : `<button class="act slate" data-a="oleave">Quitter la partie</button>`}
+        </div>` : '';
     return `<div class="app"><div class="ogame">
       <div class="top"><button class="tool" data-a="oleave">← Quitter</button>
         <span class="rcode small"><b>#${esc(OL.code)}</b></span></div>
       <h1>20K <span>en ligne</span></h1>
       ${orderBanner}
       ${banner}
+      ${g.winner !== null ? endBar : ''}
       <div class="rows">${rows}</div>
-      ${turnArea}
+      ${g.winner !== null ? '' : turnArea}
       ${journal}
       <p class="version">Partie #${esc(OL.code)}</p>
     </div></div>`;
@@ -2797,26 +2818,32 @@ function olAskStats() {
     // On ne peut pas encaisser plus que le restant (il faut atteindre 20000 pile).
     // Si le jet dépasse, on affiche « trop » et on ne permet PAS d'encaisser (on passe).
     const trop = !perdu && !inSteal && tp.score != null && tp.score > restant;
-    const canBank = !perdu && !trop && tp.score >= (inSteal ? DES_VOL_MIN_PROD : (myScore > 0 ? 1 : T.OUVRAGE));
+    const exact = !perdu && !inSteal && tp.score === restant && restant > 0;   // tombe pile sur le restant!
+    const mustPass = perdu || trop;
+    const canBank = !mustPass && tp.score >= (inSteal ? DES_VOL_MIN_PROD : (myScore > 0 ? 1 : T.OUVRAGE));
     const diceBadge = !perdu
       ? `<span class="diceleft" style="color:${dieValueColor(diceLeft)};border-color:${dieValueColor(diceLeft)};background:${dieValueColor(diceLeft)}1f" title="Nombre de dés qu'on va relancer">${diceLeft} dés</span>` : '';
     const tropMsg = trop ? `<div class="dmsg warn">⚖️ C'est trop : ${fmt(tp.score)} dépasse le restant (${fmt(restant)}). Tu ne peux pas encaisser — passe ton tour (dés perdus).</div>` : '';
     const passerLab = trop ? `C'est trop — passer à ${esc((OL.g && OL.g.names[dNextI()]) || '')}`
       : `Passer à ${esc((OL.g && OL.g.names[dNextI()]) || '')}`;
-    const volMsg = inSteal && OL.g && OL.g.prevTurn
-      ? `<div class="dmsg"><b>Vol en cours</b> : dés restants de <b>${esc((OL.g.names[OL.stealSource]) || '?')}</b> — ${fmt(OL.stealGain || 0)} pts volés à copier. Encaisser ajoutera ton score + le vol.</div>` : '';
+    // Boutons : si l'on doit passer (perdu/trop), on ne montre PAS Relancer/Encaisser, juste « Passer ».
+    // Si l'on tombe exactement sur le restant : bouton « Encaisser et terminer la partie ! ».
+    const bar = mustPass
+      ? `<div class="actions" style="grid-template-columns:1fr;margin-top:8px">
+          <button class="act ok" data-a="olost">${passerLab}</button>
+        </div>`
+      : (exact
+          ? `<div class="actions" style="grid-template-columns:1fr;margin-top:8px">
+              <button class="act ok" data-a="obank">🏆 Encaisser et terminer la partie !</button>
+            </div>`
+          : `<div class="dice-wrap"><button class="reroll" data-a="oroll" style="flex:1">🎲 Relancer</button></div>
+             <div class="actions" style="grid-template-columns:1fr;margin-top:8px">
+               <button class="act ok" data-a="obank" ${canBank ? '' : 'disabled'}>${inSteal ? 'Encaisser le vol' : 'Arrêter & encaisser'}</button>
+             </div>`);
     return `<div class="dgrid">${cells}</div>
-      <div class="dice-wrap"><span></span>${diceBadge}<button class="reroll" data-a="oroll" style="flex:1" ${perdu ? 'disabled' : ''}>${perdu || trop ? 'Relancer' : 'Relancer'}</button></div>
+      ${diceBadge ? `<div class="dice-wrap"><span></span>${diceBadge}</div>` : ''}
       ${tropMsg}
-      ${volMsg}
-      <div class="actions" style="grid-template-columns:${(perdu || trop) ? '1fr' : '1fr'};margin-top:8px">
-        ${(perdu || trop)
-          ? `<button class="act slate" data-a="olost">${passerLab}</button>`
-          : ''}
-      </div>
-      <div class="actions" style="grid-template-columns:1fr;margin-top:8px">
-        <button class="act ok" data-a="obank" ${canBank ? '' : 'disabled'}>${inSteal ? 'Encaisser le vol' : 'Arrêter & encaisser'}</button>
-      </div>`;
+      ${bar}`;
   }
   function dNextI() { const n = (OL.g && OL.g.names.length) || 0; return n ? (OL.g.current + 1) % n : 0; }
   function showOTurn(t) {
