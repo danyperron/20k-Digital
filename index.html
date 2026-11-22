@@ -886,7 +886,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.59';
+  const VERSION = '3.60';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -2192,7 +2192,11 @@ h1 span{color:var(--muted);font-weight:600}
       return c; } catch (e) { return 'c' + Math.random().toString(36).slice(2, 8); }
   }
   function olConnect(action) {
-    if (OL.connected) return;
+    // Si un ancien WebSocket est déjà ouvert (ex. connexion d'arrière-plan depuis
+    // l'écran répertoire/stats via /room/m), on le ferme AVANT de créer/rejoindre une
+    // vraie partie : sinon `if (OL.connected) return` ferait que « Créer » ne se passe pas.
+    olStopRosterPoll();
+    if (OL.ws) { try { OL.ws.onclose = null; OL.ws.close(); } catch (e) {} OL.ws = null; OL.connected = false; }
     let W = null;
     try { W = window.WebSocket; } catch (e) {}
     if (!W) { OL.error = 'WebSocket non supporté sur ce navigateur.'; render(); return; }
