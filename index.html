@@ -886,7 +886,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.60';
+  const VERSION = '3.61';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -1442,6 +1442,7 @@ h1 span{color:var(--muted);font-weight:600}
       case 'online': oDo('online'); break;
       case 'ocreate': oDo('ocreate'); break;
       case 'ojoin': oDo('ojoin'); break;
+      case 'orejoin': oDo('orejoin'); break;
       case 'oleave': oDo('oleave'); break;
       case 'obank': oDo('obank'); break;
       case 'olost': oDo('olost'); break;
@@ -2191,6 +2192,33 @@ h1 span{color:var(--muted);font-weight:600}
       if (!c) { c = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); localStorage.setItem('20k-ws-client', c); }
       return c; } catch (e) { return 'c' + Math.random().toString(36).slice(2, 8); }
   }
+  // Mémorise la salle (code 4 chiffres) pour permettre une reconnexion après coupure.
+  // Ce device peut ensuite la reprendre (rejoindre) si la partie est toujours ouverte.
+  function olRememberRoom(code) {
+    if (!code || !/^\d{4}$/.test(code)) return;
+    try { localStorage.setItem('20k-ws-room', code); } catch (e) {}
+  }
+  function olSavedRoom() {
+    try { const c = localStorage.getItem('20k-ws-room'); if (c && /^\d{4}$/.test(c)) return c; } catch (e) {}
+    return '';
+  }
+  function olClearRoom() {
+    try { localStorage.removeItem('20k-ws-room'); } catch (e) {}
+  }
+  // Persistance du profil « Mon joueur » sélectionné : permet de reprendre la bonne
+  // identité après reconnexion / rechargement.
+  const KEY_PROFILE = '20k-ws-profile';
+  function olSetProfile(p) {
+    OL.profile = p ? { id: p.id, name: p.name } : null;
+    try { if (p) localStorage.setItem(KEY_PROFILE, p.id); else localStorage.removeItem(KEY_PROFILE); } catch (e) {}
+  }
+  function olInitProfile() {
+    try {
+      const id = localStorage.getItem(KEY_PROFILE);
+      const p = id != null ? findPlayer(id) : null;
+      if (p) OL.profile = { id: p.id, name: p.name };
+    } catch (e) {}
+  }
   function olConnect(action) {
     // Si un ancien WebSocket est déjà ouvert (ex. connexion d'arrière-plan depuis
     // l'écran répertoire/stats via /room/m), on le ferme AVANT de créer/rejoindre une
@@ -2209,6 +2237,7 @@ h1 span{color:var(--muted);font-weight:600}
     OL.ws = conn;
     conn.onopen = () => {
       OL.connected = true;
+      olInitProfile();   // restaurer l'identité « Mon joueur » mémorisée (reprise)
       const who = olMyName();
       const color = olMyColor();
       const clientId = olClientId();
@@ -2221,7 +2250,12 @@ h1 span{color:var(--muted);font-weight:600}
     };
     conn.onmessage = e => { try { olHandle(JSON.parse(e.data)); } catch (err) {} };
     conn.onclose = () => { OL.connected = false; OL.ws = null;
-      if (!OL.leaving) { OL.error = 'Impossible de joindre le serveur en ligne. Déployez le serveur (dev/README-online.md) puis configurez son URL dans localStorage[\'20k-ws\'].'; }
+      if (!OL.leaving) {
+        const saved = olSavedRoom();
+        OL.error = saved
+          ? 'Connexion interrompue. La partie se reprend avec le code ' + saved + ' (bouton « Reprendre » ci-dessous).'
+          : 'Connexion au serveur en ligne interrompue.';
+      }
       OL.leaving = false;
       olStopRosterPoll();
       render(); };
@@ -2381,6 +2415,7 @@ h1 span{color:var(--muted);font-weight:600}
     OL.ws = null; OL.connected = false; OL.myIndex = -1; OL.code = ''; OL.members = [];
     OL.g = null; OL.myTurn = false; OL.turnProxy = null; OL.leaving = false;
     olStopRosterPoll();
+    olClearRoom();
   }
   function olEnsureConn() {
     if (OL.connected) { olRosterSync(); olStartRosterPoll(); olAskStats(); return; }
@@ -2397,8 +2432,8 @@ h1 span{color:var(--muted);font-weight:600}
   }
   function olHandle(msg) {
     switch (msg.type) {
-      case 'created': OL.code = msg.code; OL.myIndex = msg.playerIndex; OL.members = msg.members || []; DS.screen = 'host'; olAskStats(); break;
-      case 'welcome': OL.code = msg.code; OL.myIndex = msg.playerIndex; OL.members = msg.members || []; DS.screen = 'ogame'; olAskStats(); break;
+      case 'created': OL.code = msg.code; OL.myIndex = msg.playerIndex; OL.members = msg.members || []; DS.screen = 'host'; olRememberRoom(msg.code); olAskStats(); break;
+      case 'welcome': OL.code = msg.code; OL.myIndex = msg.playerIndex; OL.members = msg.members || []; DS.screen = 'ogame'; olRememberRoom(msg.code); olAskStats(); break;
       case 'stats': OL.stats = { byName: msg.byName || {}, byId: msg.byId || {}, games: msg.games || [] }; break;
       case 'roster': olApplyServerRoster(msg.players || []); olAskStats(); break;
       case 'state': OL.g = msg.g; OL.seq = msg.seq; OL.members = (msg.g && msg.g.members) || OL.members; OL.keptByRoll = (msg.g && msg.g.keptByRoll) || []; refreshMyTurn(); maybeStart(); break;
@@ -2448,10 +2483,14 @@ function olAskStats() {
       case 'online': OL.order = ''; OL.error = ''; DS.screen = 'ojoin'; break;
       case 'ocreate': OL.error = ''; olConnect('create'); break;
       case 'ojoin': OL.error = ''; olConnect('join'); break;
+      case 'orejoin': {  // reprendre une partie interrompue (code mémorisé)
+        const saved = olSavedRoom();
+        if (saved) { OL.order = saved; OL.error = ''; olConnect('join'); }
+        break; }
       case 'oinput': OL.order = String(v == null ? '' : v).slice(0, 4); break;
       case 'oleave': olDisconnect(); DS.screen = 'setup-des'; break;
       case 'ostats': DS.screen = 'ostats'; OL.error = ''; olEnsureConn(); break;
-      case 'osetp': { const p = findPlayer(String(v)); OL.profile = p ? { id: p.id, name: p.name } : null; render(); break; }
+      case 'osetp': { const p = findPlayer(String(v)); olSetProfile(p); render(); break; }
       case 'obank': {  // le joueur actif encaisse depuis son tour local (normal ou vol)
         const t = OL.turnProxy;
         if (!t || !OL.myTurn) break;
@@ -2547,6 +2586,7 @@ function olAskStats() {
       <div><h2>Rejoindre une partie</h2>
         <input type="text" id="o-code" autocomplete="off" inputmode="numeric" maxlength="4"
           placeholder="Code à 4 chiffres" value="${esc(OL.order || '')}" style="text-align:center;letter-spacing:.2em;font:700 22px var(--num)">
+        ${olSavedRoom() ? `<button class="act ok" style="width:100%;margin-top:8px" data-a="orejoin">↺ Reprendre la partie #${esc(olSavedRoom())}</button>` : ''}
         <button class="act slate" style="width:100%;margin-top:8px" data-a="ojoin">Rejoindre</button>
       </div>
       <button class="linkbtn" style="margin-top:10px" data-a="ostats">📊 Mes statistiques en ligne</button>
