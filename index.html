@@ -886,7 +886,7 @@ h1 span{color:var(--muted);font-weight:600}
 
   const KEY = '20k-scorecard-v1';
   const KEY_DES = '20k-scorecard-v1-des';
-  const VERSION = '3.69';
+  const VERSION = '3.70';
 
   // dice-mode motors
   const D = window.DiceEngine;
@@ -989,7 +989,7 @@ h1 span{color:var(--muted);font-weight:600}
       screen: 'setup-des', count: 4, names: [], players: [], playerIds: [], selected: [],
       current: 0, winner: null, prevTurn: null,
       turn: null, phase: 'idle', steal: null, log: [], keptByRoll: [],
-      gameId: 1, jetLog: [], stats: []
+      gameId: 1, jetLog: [], stats: [], histView: -1
     };
   }
   function loadDes() {
@@ -1325,20 +1325,15 @@ h1 span{color:var(--muted);font-weight:600}
         saveDes();
         break;
       }
-      case 'dereplay': {   // relancer une partie passée avec les mêmes joueurs
+      case 'detview': {   // voir le détail final (lecture seule) d'une partie terminée
         const idx = +v;
         const past = DS.stats[idx];
-        if (!past || !Array.isArray(past.names) || !past.names.length) break;
-        DS.names = past.names.slice();
-        DS.players = past.players.map(p => ({ score: 0, last: null }));
-        DS.count = DS.names.length;
-        DS.current = 0; DS.winner = null; DS.prevTurn = null;
-        DS.turn = null; DS.phase = 'idle'; DS.steal = null; DS.log = []; DS.keptByRoll = [];
-        DS.jetLog = [];
-        if (DS.gameId <= 0) DS.gameId = 1;
-        DS.screen = 'game-des';
+        if (!past) break;
+        DS.histView = idx;   // on rendra le détail de cette partie archivée
+        DS.screen = 'dethist';
         break;
       }
+      case 'backhist': DS.histView = -1; DS.screen = 'setup-des'; saveDes(); break;
       case 'lancier': {   // début de tour normal (renonce au vol)
         DS.turn = T.start(T.fresh());
         DS.phase = 'normal';
@@ -1972,6 +1967,35 @@ h1 span{color:var(--muted);font-weight:600}
     </div>`;
   }
 
+  // Détail (lecture seule) d'une partie terminée : gagnant + scores, sans pouvoir jouer.
+  function viewDesHist() {
+    const i = DS.histView;
+    const g = (i >= 0 && DS.stats[i]) ? DS.stats[i] : null;
+    if (!g) { DS.screen = 'setup-des'; return viewSetupDes(); }
+    const date = new Date(g.ts).toLocaleDateString('fr-CA', { day: 'numeric', month: 'long', year: 'numeric' });
+    const win = g.winner >= 0 ? g.names[g.winner] : '?';
+    const winIdx = g.winner;
+    const rows = g.players.map((p, pl) => {
+      const won = pl === winIdx;
+      const place = { 0: '🥇', 1: '🥈', 2: '🥉' }[pl] || (pl + 1) + 'e';
+      return `<section class="row${won ? ' won' : ''}">
+        <div class="who"><div class="namewrap"><span class="dot"></span><span class="name">${esc(g.names[pl] || 'J' + (pl + 1))}</span></div>
+          <div class="meta">${place}</div></div>
+        <div class="nums"><div class="num"><small>Points</small><b>${fmt(p.score)}</b></div>
+          <div class="num rem"><small>${won ? 'Gagnant 🏆' : 'Restant'}</small><b>${won ? '' : fmt(DES_TARGET - p.score)}</b></div></div>
+      </section>`;
+    }).join('');
+    return `<div class="app"><div class="ogame">
+      <div class="top"><button class="tool" data-a="backhist">← Retour</button>
+        <span class="rcode small"><b>#${g.g || i + 1}</b></span></div>
+      <h1>20K <span>aux dés</span></h1>
+      <div class="dmsg good">🏆 <b>${esc(win)}</b> a gagné — ${date} · ${g.jets} jet${g.jets === 1 ? '' : 's'}</div>
+      <div class="rows">${rows}</div>
+      <button class="act slate" style="width:100%;margin-top:10px" data-a="backhist">← Retour à l'accueil</button>
+      <p class="version">Partie terminée — historique</p>
+    </div></div>`;
+  }
+
   function viewSetupDes() {
     const resumableDes = () => DS.players.length > 0 && DS.winner === null;
     const resume = resumableDes();
@@ -2008,8 +2032,8 @@ h1 span{color:var(--muted);font-weight:600}
           const date = new Date(g.ts).toLocaleDateString('fr-CA', { day: 'numeric', month: 'short' });
           const winName = esc(g.names[g.winner] || '?');
           const scores = g.players.map((p, i) => `${esc(g.names[i] || 'J')} ${fmt(p.score)}`).join(' · ');
-          return `<button class="pastrow" data-a="dereplay" data-v="${idx}">
-            <span class="rt"><b>🏆 ${winName}</b><small>${date} · ${scores} · ${g.jets} jet${g.jets===1?'':'s'}</small></span>${ICON.chev}
+          return `<button class="pastrow" data-a="detview" data-v="${idx}">
+            <span class="rt"><b>🏆 ${winName}</b><small>${date} · ${scores} · ${g.jets} jet${g.jets===1?'':'s'} — voir le détail</small></span>${ICON.chev}
           </button>`;
         }).join('')}</div>` : ''}
       <div><h2>Joueurs de la partie <span class="cnt">${sel.length}</span></h2>${playersHtml}</div>
@@ -2873,7 +2897,8 @@ function olAskStats() {
     // Cette version est dédiée au jeu de dés (mode tableau retiré de l'UI) :
     // la page principale est l'écran dés (accueil sans partie, ou jeu en cours).
     if (!inDesMode()) { MODE = 'des'; saveMode(); if (!DS.screen) DS.screen = 'setup-des'; }
-    root.innerHTML = DS.screen === 'game-des' ? viewGameDes() : DS.screen === 'roster' ? viewRoster()
+    root.innerHTML = DS.screen === 'game-des' ? viewGameDes() : DS.screen === 'dethist' ? viewDesHist()
+    : DS.screen === 'roster' ? viewRoster()
     : DS.screen === 'ojoin' ? viewOJoin() : DS.screen === 'host' ? viewOHost() : DS.screen === 'ogame' ? viewOGame()
     : DS.screen === 'ostats' ? viewOStats() : viewSetupDes();
     const panel = document.getElementById('panel');
